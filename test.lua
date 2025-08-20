@@ -63,7 +63,21 @@ local CheatSystem = {
     CoordinateDisplay = nil,
     ToggleButtons = {},
     CoordinateEnabled = false,
-    CoordinateConnection = nil
+    CoordinateConnection = nil,
+    
+    -- Notification System
+    NotificationFrame = nil,
+    NotificationEnabled = true,
+    NotificationQueue = {},
+    
+    -- Console System
+    ConsoleFrame = nil,
+    ConsoleEnabled = false,
+    ConsoleLog = {},
+    
+    -- GUI State
+    IsMinimized = false,
+    MinimizeButton = nil
 }
 
 -- ===== UTILITY FUNCTIONS ===== --
@@ -375,24 +389,32 @@ function DebugSystem.InteractWithObject(objectIndex)
         if workspaceObj.Name == obj.name and workspaceObj.ClassName == obj.className then
             if GetDistance(workspaceObj.Position or workspaceObj.Parent.Position, obj.position) < 5 then
                 -- Found the object, try to interact
+                local success = false
+                local action = obj.gameFunction or "Unknown"
+                
                 if workspaceObj:IsA("ClickDetector") then
                     fireclickdetector(workspaceObj)
-                    Log("Clicked object: " .. obj.name, "success")
-                    return true
+                    success = true
                 elseif workspaceObj:FindFirstChild("ClickDetector") then
                     fireclickdetector(workspaceObj.ClickDetector)
-                    Log("Clicked object: " .. obj.name, "success")
-                    return true
+                    success = true
                 elseif workspaceObj:FindFirstChild("ProximityPrompt") then
                     fireproximityprompt(workspaceObj.ProximityPrompt)
-                    Log("Activated proximity prompt: " .. obj.name, "success")
+                    success = true
+                end
+                
+                -- Log interaction with notification
+                if success then
+                    NotificationSystem.LogInteraction(obj.name, action, true)
                     return true
+                else
+                    NotificationSystem.LogInteraction(obj.name, action, false)
                 end
             end
         end
     end
     
-    Log("Could not interact with object: " .. obj.name, "error")
+    NotificationSystem.LogInteraction(obj.name, "Interact", false)
     return false
 end
 
@@ -412,25 +434,258 @@ function DebugSystem.TeleportToObject(objectIndex)
     return TeleportSystem.SafeTeleport(obj.position + Vector3.new(0, 5, 0))
 end
 
-function DebugSystem.ShowInteractionLog()
-    Log("=== INTERACTION LOG ===", "debug")
-    local recentLogs = {}
+-- ===== NOTIFICATION SYSTEM ===== --
+local NotificationSystem = {}
+
+function NotificationSystem.CreateNotification(title, message, type, duration)
+    if not CheatSystem.NotificationEnabled then return end
     
-    -- Get last 20 logs
-    local startIndex = math.max(1, #CheatSystem.InteractionLog - 19)
-    for i = startIndex, #CheatSystem.InteractionLog do
-        table.insert(recentLogs, CheatSystem.InteractionLog[i])
+    duration = duration or 3
+    local notification = {
+        title = title,
+        message = message,
+        type = type or "info",
+        timestamp = tick(),
+        duration = duration
+    }
+    
+    table.insert(CheatSystem.NotificationQueue, notification)
+    NotificationSystem.ShowNotification(notification)
+    
+    -- Add to console log
+    local logMessage = string.format("[%s] %s: %s", type:upper(), title, message)
+    table.insert(CheatSystem.ConsoleLog, {
+        timestamp = tick(),
+        message = logMessage,
+        type = type
+    })
+    
+    -- Keep only last 50 console logs
+    if #CheatSystem.ConsoleLog > 50 then
+        table.remove(CheatSystem.ConsoleLog, 1)
+    end
+end
+
+function NotificationSystem.ShowNotification(notification)
+    if not CheatSystem.GUI then return end
+    
+    local notifFrame = Instance.new("Frame")
+    notifFrame.Name = "Notification"
+    notifFrame.Parent = CheatSystem.GUI
+    notifFrame.BackgroundColor3 = Config.Theme.Primary
+    notifFrame.BorderColor3 = notification.type == "success" and Config.Theme.Success or 
+                             notification.type == "error" and Config.Theme.Error or
+                             notification.type == "warning" and Config.Theme.Warning or
+                             Config.Theme.Accent
+    notifFrame.BorderSizePixel = 2
+    notifFrame.Position = UDim2.new(1, -320, 0, 10)
+    notifFrame.Size = UDim2.new(0, 300, 0, 80)
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = notifFrame
+    
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Parent = notifFrame
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Position = UDim2.new(0, 10, 0, 5)
+    titleLabel.Size = UDim2.new(1, -20, 0, 25)
+    titleLabel.Font = Enum.Font.SourceSansBold
+    titleLabel.Text = notification.title
+    titleLabel.TextColor3 = Config.Theme.Text
+    titleLabel.TextSize = 16
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local messageLabel = Instance.new("TextLabel")
+    messageLabel.Parent = notifFrame
+    messageLabel.BackgroundTransparency = 1
+    messageLabel.Position = UDim2.new(0, 10, 0, 30)
+    messageLabel.Size = UDim2.new(1, -20, 1, -35)
+    messageLabel.Font = Enum.Font.SourceSans
+    messageLabel.Text = notification.message
+    messageLabel.TextColor3 = Config.Theme.Text
+    messageLabel.TextSize = 14
+    messageLabel.TextWrapped = true
+    messageLabel.TextXAlignment = Enum.TextXAlignment.Left
+    messageLabel.TextYAlignment = Enum.TextYAlignment.Top
+    
+    -- Slide in animation
+    notifFrame.Position = UDim2.new(1, 50, 0, 10)
+    local tweenIn = TweenService:Create(notifFrame, TweenInfo.new(0.3), {
+        Position = UDim2.new(1, -320, 0, 10)
+    })
+    tweenIn:Play()
+    
+    -- Auto hide after duration
+    task.wait(notification.duration)
+    local tweenOut = TweenService:Create(notifFrame, TweenInfo.new(0.3), {
+        Position = UDim2.new(1, 50, 0, 10)
+    })
+    tweenOut:Play()
+    tweenOut.Completed:Connect(function()
+        notifFrame:Destroy()
+    end)
+end
+
+function NotificationSystem.LogInteraction(objectName, action, result)
+    local title = action:upper() .. " Action"
+    local message = string.format("%s %s: %s", action, objectName, result and "Success" or "Failed")
+    local type = result and "success" or "error"
+    
+    NotificationSystem.CreateNotification(title, message, type, 2)
+    Log(string.format("Interaction: %s %s - %s", action, objectName, result and "✓" or "✗"), type)
+end
+
+-- ===== CONSOLE SYSTEM ===== --
+local ConsoleSystem = {}
+
+function ConsoleSystem.CreateConsole()
+    if CheatSystem.ConsoleFrame then
+        CheatSystem.ConsoleFrame:Destroy()
+    end
+    
+    local consoleFrame = Instance.new("Frame")
+    consoleFrame.Name = "ConsoleFrame"
+    consoleFrame.Parent = CheatSystem.GUI
+    consoleFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    consoleFrame.BorderColor3 = Config.Theme.Accent
+    consoleFrame.BorderSizePixel = 2
+    consoleFrame.Position = UDim2.new(0, 10, 1, -250)
+    consoleFrame.Size = UDim2.new(0, 400, 0, 200)
+    consoleFrame.Visible = CheatSystem.ConsoleEnabled
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = consoleFrame
+    
+    local header = Instance.new("TextLabel")
+    header.Parent = consoleFrame
+    header.BackgroundColor3 = Config.Theme.Accent
+    header.Size = UDim2.new(1, 0, 0, 25)
+    header.Font = Enum.Font.SourceSansBold
+    header.Text = "🖥️ CONSOLE LOG"
+    header.TextColor3 = Config.Theme.Text
+    header.TextSize = 14
+    
+    local headerCorner = Instance.new("UICorner")
+    headerCorner.CornerRadius = UDim.new(0, 8)
+    headerCorner.Parent = header
+    
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Parent = consoleFrame
+    scrollFrame.BackgroundTransparency = 1
+    scrollFrame.Position = UDim2.new(0, 5, 0, 30)
+    scrollFrame.Size = UDim2.new(1, -10, 1, -35)
+    scrollFrame.ScrollBarThickness = 6
+    scrollFrame.ScrollBarImageColor3 = Config.Theme.Secondary
+    
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.Parent = scrollFrame
+    listLayout.Padding = UDim.new(0, 2)
+    
+    CheatSystem.ConsoleFrame = consoleFrame
+    return scrollFrame
+end
+
+function ConsoleSystem.UpdateConsole()
+    if not CheatSystem.ConsoleFrame or not CheatSystem.ConsoleEnabled then return end
+    
+    local scrollFrame = CheatSystem.ConsoleFrame:FindFirstChild("ScrollingFrame")
+    if not scrollFrame then return end
+    
+    -- Clear existing logs
+    for _, child in pairs(scrollFrame:GetChildren()) do
+        if child:IsA("TextLabel") then
+            child:Destroy()
+        end
+    end
+    
+    -- Add recent logs
+    local recentLogs = {}
+    local startIndex = math.max(1, #CheatSystem.ConsoleLog - 15)
+    for i = startIndex, #CheatSystem.ConsoleLog do
+        table.insert(recentLogs, CheatSystem.ConsoleLog[i])
     end
     
     for _, logEntry in ipairs(recentLogs) do
-        local timeStr = string.format("%.2f", logEntry.timestamp % 1000)
-        Log("[" .. timeStr .. "] " .. logEntry.message, logEntry.type)
+        local logLabel = Instance.new("TextLabel")
+        logLabel.Parent = scrollFrame
+        logLabel.BackgroundTransparency = 1
+        logLabel.Size = UDim2.new(1, 0, 0, 20)
+        logLabel.Font = Enum.Font.Code
+        logLabel.Text = string.format("[%.1f] %s", logEntry.timestamp % 1000, logEntry.message)
+        logLabel.TextColor3 = logEntry.type == "success" and Config.Theme.Success or
+                             logEntry.type == "error" and Config.Theme.Error or
+                             logEntry.type == "warning" and Config.Theme.Warning or
+                             Config.Theme.Text
+        logLabel.TextSize = 12
+        logLabel.TextXAlignment = Enum.TextXAlignment.Left
     end
-    Log("======================", "debug")
+    
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #recentLogs * 22)
+    scrollFrame.CanvasPosition = Vector2.new(0, scrollFrame.CanvasSize.Y.Offset)
+end
+
+function ConsoleSystem.ToggleConsole()
+    CheatSystem.ConsoleEnabled = not CheatSystem.ConsoleEnabled
+    
+    if CheatSystem.ConsoleEnabled then
+        if not CheatSystem.ConsoleFrame then
+            ConsoleSystem.CreateConsole()
+        end
+        CheatSystem.ConsoleFrame.Visible = true
+        ConsoleSystem.UpdateConsole()
+        Log("Console enabled! 🖥️", "success")
+    else
+        if CheatSystem.ConsoleFrame then
+            CheatSystem.ConsoleFrame.Visible = false
+        end
+        Log("Console disabled.", "warning")
+    end
 end
 
 -- ===== MOBILE UI SYSTEM ===== --
 local MobileUI = {}
+
+-- GUI Toggle functionality
+function MobileUI.ToggleGUI()
+    if not MobileUI.GuiState then return end
+    
+    local mainFrame = MobileUI.GuiState.mainFrame
+    local hideButton = MobileUI.GuiState.hideButton
+    
+    if not mainFrame or not hideButton then return end
+    
+    if MobileUI.GuiState.isMinimized then
+        -- Show GUI
+        mainFrame.Size = UDim2.new(0, 300, 0, 400)
+        hideButton.Text = "−"
+        MobileUI.GuiState.isMinimized = false
+        Log("GUI Expanded", "info")
+    else
+        -- Hide GUI (minimize to header only)
+        mainFrame.Size = UDim2.new(0, 300, 0, 40)
+        hideButton.Text = "+"
+        MobileUI.GuiState.isMinimized = true
+        Log("GUI Minimized", "info")
+    end
+end
+
+function MobileUI.HideGUI()
+    if MobileUI.GuiState and MobileUI.GuiState.screenGui then
+        MobileUI.GuiState.screenGui.Enabled = false
+        MobileUI.GuiState.isVisible = false
+        Log("GUI Hidden", "info")
+    end
+end
+
+function MobileUI.ShowGUI()
+    if MobileUI.GuiState and MobileUI.GuiState.screenGui then
+        MobileUI.GuiState.screenGui.Enabled = true
+        MobileUI.GuiState.isVisible = true
+        Log("GUI Shown", "info")
+    end
+end
 
 function MobileUI.CreateMainGUI()
     if CheatSystem.GUI then
@@ -443,6 +698,13 @@ function MobileUI.CreateMainGUI()
     screenGui.Parent = CoreGui
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     CheatSystem.GUI = screenGui
+    
+    -- GUI State for hide/show
+    MobileUI.GuiState = {
+        isVisible = true,
+        isMinimized = false,
+        screenGui = screenGui
+    }
     
     -- Main Frame
     local mainFrame = Instance.new("Frame")
@@ -472,6 +734,29 @@ function MobileUI.CreateMainGUI()
     header.Text = "🎮 CHEAT SYSTEM v1.0"
     header.TextColor3 = Config.Theme.Text
     header.TextSize = 18
+    
+    -- Hide/Show Button
+    local hideButton = Instance.new("TextButton")
+    hideButton.Name = "HideButton"
+    hideButton.Parent = header
+    hideButton.BackgroundColor3 = Config.Theme.Button
+    hideButton.BorderSizePixel = 1
+    hideButton.BorderColor3 = Config.Theme.Text
+    hideButton.Font = Enum.Font.SourceSansBold
+    hideButton.Text = "−"
+    hideButton.TextColor3 = Config.Theme.Text
+    hideButton.TextSize = 20
+    hideButton.Position = UDim2.new(1, -35, 0, 5)
+    hideButton.Size = UDim2.new(0, 30, 0, 30)
+    
+    -- Store references for hide/show
+    MobileUI.GuiState.mainFrame = mainFrame
+    MobileUI.GuiState.hideButton = hideButton
+    
+    -- Hide/Show functionality
+    hideButton.MouseButton1Click:Connect(function()
+        MobileUI.ToggleGUI()
+    end)
     
     local headerCorner = Instance.new("UICorner")
     headerCorner.CornerRadius = UDim.new(0, 10)
@@ -770,19 +1055,6 @@ function MobileUI.SetupToggleButtons()
     end)
 end
 
-function MobileUI.ToggleGUI()
-    if not CheatSystem.GUI then
-        MobileUI.CreateMainGUI()
-        MobileUI.SetupToggleButtons()
-        CheatSystem.IsVisible = true
-        Log("Mobile GUI created! 📱", "success")
-    else
-        CheatSystem.MainFrame.Visible = not CheatSystem.MainFrame.Visible
-        CheatSystem.IsVisible = CheatSystem.MainFrame.Visible
-        Log("GUI " .. (CheatSystem.IsVisible and "shown" or "hidden"), "success")
-    end
-end
-
 -- ===== COMMAND SYSTEM ===== --
 local CommandSystem = {}
 
@@ -800,6 +1072,18 @@ local Commands = {
         else
             Log("Usage: tp <player> OR tp <x> <y> <z>", "error")
         end
+    end,
+    
+    ["hide"] = function() 
+        MobileUI.HideGUI() 
+    end,
+    
+    ["show"] = function() 
+        MobileUI.ShowGUI() 
+    end,
+    
+    ["toggle"] = function() 
+        MobileUI.ToggleGUI() 
     end,
     
     ["clicktp"] = function(args)
