@@ -27,7 +27,8 @@ local Config = {
         Text = Color3.fromRGB(255, 255, 255),
         Success = Color3.fromRGB(0, 255, 0),
         Warning = Color3.fromRGB(255, 255, 0),
-        Error = Color3.fromRGB(255, 0, 0)
+        Error = Color3.fromRGB(255, 0, 0),
+        Button = Color3.fromRGB(60, 60, 60) -- Added button color
     },
     
     -- Teleport Settings
@@ -739,7 +740,7 @@ function MobileUI.CreateMainGUI()
     local hideButton = Instance.new("TextButton")
     hideButton.Name = "HideButton"
     hideButton.Parent = header
-    hideButton.BackgroundColor3 = Config.Theme.Button
+    hideButton.BackgroundColor3 = Config.Theme.Button -- ensure defined
     hideButton.BorderSizePixel = 1
     hideButton.BorderColor3 = Config.Theme.Text
     hideButton.Font = Enum.Font.SourceSansBold
@@ -949,15 +950,18 @@ function MobileUI.SetupToggleButtons()
         if enabled then
             DebugSystem.ScanNearbyObjects()
             -- Auto scan every 5 seconds
-            CheatSystem.AutoScanConnection = RunService.Heartbeat:Connect(function()
-                wait(5)
-                if CheatSystem.ToggleButtons["🔍 Scanner"].isToggled then
-                    DebugSystem.ScanNearbyObjects()
+            if CheatSystem.AutoScanConnection then CheatSystem.AutoScanConnection:Disconnect() end
+            CheatSystem.AutoScanConnection = task.spawn(function()
+                while CheatSystem.ToggleButtons["🔍 Scanner"] and CheatSystem.ToggleButtons["🔍 Scanner"].isToggled do
+                    task.wait(5)
+                    if CheatSystem.ToggleButtons["🔍 Scanner"].isToggled then
+                        DebugSystem.ScanNearbyObjects()
+                    end
                 end
             end)
         else
             if CheatSystem.AutoScanConnection then
-                CheatSystem.AutoScanConnection:Disconnect()
+                -- stop loop by clearing toggle state loop condition
                 CheatSystem.AutoScanConnection = nil
             end
         end
@@ -967,88 +971,84 @@ function MobileUI.SetupToggleButtons()
     MobileUI.CreateToggleButton("📊 Stats", UDim2.new(0, 150, 0, 230), function(enabled)
         if enabled then
             PlayerSystem.GetPlayerStats()
-            -- Show stats every 3 seconds
-            CheatSystem.StatsConnection = RunService.Heartbeat:Connect(function()
-                wait(3)
-                if CheatSystem.ToggleButtons["📊 Stats"].isToggled then
-                    PlayerSystem.GetPlayerStats()
+            if CheatSystem.StatsConnection then CheatSystem.StatsConnection:Disconnect() end
+            CheatSystem.StatsConnection = task.spawn(function()
+                while CheatSystem.ToggleButtons["📊 Stats"] and CheatSystem.ToggleButtons["📊 Stats"].isToggled do
+                    task.wait(3)
+                    if CheatSystem.ToggleButtons["📊 Stats"].isToggled then
+                        PlayerSystem.GetPlayerStats()
+                    end
                 end
             end)
         else
             if CheatSystem.StatsConnection then
-                CheatSystem.StatsConnection:Disconnect()
                 CheatSystem.StatsConnection = nil
             end
         end
     end, false)
     
-    -- Create action buttons
+    -- Console Toggle (new)
+    MobileUI.CreateToggleButton("🖥 Console", UDim2.new(0, 10, 0, 275), function(enabled)
+        ConsoleSystem.ToggleConsole() -- toggles internally
+        -- Ensure state matches button
+        if CheatSystem.ConsoleFrame then
+            CheatSystem.ConsoleFrame.Visible = enabled
+        end
+    end, false)
+    
+    -- Adjusted Scan Now button (moved down)
     local scanButton = Instance.new("TextButton")
     scanButton.Name = "ScanButton"
     scanButton.Parent = CheatSystem.MainFrame
     scanButton.BackgroundColor3 = Config.Theme.Accent
-    scanButton.Position = UDim2.new(0, 10, 0, 275)
+    scanButton.Position = UDim2.new(0, 150, 0, 275)
     scanButton.Size = UDim2.new(0, 130, 0, 30)
     scanButton.Font = Enum.Font.SourceSans
     scanButton.Text = "🔍 SCAN NOW"
     scanButton.TextColor3 = Config.Theme.Text
     scanButton.TextSize = 14
-    
-    local scanCorner = Instance.new("UICorner")
-    scanCorner.CornerRadius = UDim.new(0, 6)
-    scanCorner.Parent = scanButton
-    
+    local scanCorner = Instance.new("UICorner"); scanCorner.CornerRadius = UDim.new(0,6); scanCorner.Parent = scanButton
     scanButton.MouseButton1Click:Connect(function()
         DebugSystem.ScanNearbyObjects()
     end)
     
+    -- Waypoint Save button (moved down)
     local waypointButton = Instance.new("TextButton")
     waypointButton.Name = "WaypointButton"
     waypointButton.Parent = CheatSystem.MainFrame
     waypointButton.BackgroundColor3 = Config.Theme.Accent
-    waypointButton.Position = UDim2.new(0, 150, 0, 275)
+    waypointButton.Position = UDim2.new(0, 10, 0, 315)
     waypointButton.Size = UDim2.new(0, 130, 0, 30)
     waypointButton.Font = Enum.Font.SourceSans
     waypointButton.Text = "📍 SAVE POS"
     waypointButton.TextColor3 = Config.Theme.Text
     waypointButton.TextSize = 14
-    
-    local waypointCorner = Instance.new("UICorner")
-    waypointCorner.CornerRadius = UDim.new(0, 6)
-    waypointCorner.Parent = waypointButton
-    
+    local waypointCorner = Instance.new("UICorner"); waypointCorner.CornerRadius = UDim.new(0,6); waypointCorner.Parent = waypointButton
     waypointButton.MouseButton1Click:Connect(function()
         local waypointName = "pos_" .. math.floor(tick() % 10000)
         TeleportSystem.AddWaypoint(waypointName)
     end)
     
-    -- Reset button
+    -- Reset button (moved further down)
     local resetButton = Instance.new("TextButton")
     resetButton.Name = "ResetButton"
     resetButton.Parent = CheatSystem.MainFrame
     resetButton.BackgroundColor3 = Config.Theme.Warning
-    resetButton.Position = UDim2.new(0, 10, 0, 315)
-    resetButton.Size = UDim2.new(1, -20, 0, 30)
+    resetButton.Position = UDim2.new(0, 150, 0, 315)
+    resetButton.Size = UDim2.new(0, 130, 0, 30)
     resetButton.Font = Enum.Font.SourceSansBold
     resetButton.Text = "🔄 RESET ALL"
     resetButton.TextColor3 = Config.Theme.Text
     resetButton.TextSize = 14
-    
-    local resetCorner = Instance.new("UICorner")
-    resetCorner.CornerRadius = UDim.new(0, 6)
-    resetCorner.Parent = resetButton
-    
+    local resetCorner = Instance.new("UICorner"); resetCorner.CornerRadius = UDim.new(0,6); resetCorner.Parent = resetButton
     resetButton.MouseButton1Click:Connect(function()
         PlayerSystem.ResetPlayer()
-        -- Reset all toggles
         for name, toggle in pairs(CheatSystem.ToggleButtons) do
             if toggle.isToggled then
                 toggle.button.Text = name .. " OFF"
                 toggle.button.BackgroundColor3 = Config.Theme.Secondary
                 toggle.isToggled = false
-                if toggle.callback then
-                    toggle.callback(false)
-                end
+                if toggle.callback then toggle.callback(false) end
             end
         end
         Log("All systems reset! 🔄", "success")
