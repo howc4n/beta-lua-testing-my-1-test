@@ -314,6 +314,51 @@ local mainOk, mainErr = xpcall(function()
         end
     end
     
+    -- Safe instance method wrappers to prevent crashes on wrong object types
+    local function SafeGetPivot(obj)
+        if not obj then 
+            log('WARN', 'SafeGetPivot called with nil object')
+            return nil 
+        end
+        if not obj:IsA("PVInstance") then
+            log('WARN', 'SafeGetPivot called on non-PVInstance: ' .. obj.ClassName .. ' "' .. (obj.Name or 'Unknown') .. '"')
+            return nil
+        end
+        local ok, result = pcall(function() return obj:GetPivot() end)
+        if not ok then
+            log('WARN', 'SafeGetPivot failed: ' .. tostring(result))
+            return nil
+        end
+        return result
+    end
+    
+    local function SafeGetPosition(obj)
+        if not obj then 
+            log('WARN', 'SafeGetPosition called with nil object')
+            -- Use a fallback position if Vector3 is not available
+            local ok, vec = pcall(function() return Vector3.new(0, 4, 0) end)
+            return ok and vec or {X=0, Y=4, Z=0}
+        end
+        
+        -- Try GetPivot first (for Models)
+        local pivot = SafeGetPivot(obj)
+        if pivot then return pivot.Position end
+        
+        -- Try Position property (for Parts)
+        if obj:IsA("BasePart") then
+            return obj.Position
+        end
+        
+        -- Try CFrame property
+        if obj:IsA("BasePart") and obj.CFrame then
+            return obj.CFrame.Position
+        end
+        
+        log('WARN', 'SafeGetPosition: No position method available for ' .. obj.ClassName)
+        local ok, vec = pcall(function() return Vector3.new(0, 4, 0) end)
+        return ok and vec or {X=0, Y=4, Z=0}
+    end
+    
     -----------------------------------------------------------------------------
     -- SERVICES AND VARIABLES
     -----------------------------------------------------------------------------
@@ -577,7 +622,11 @@ local mainOk, mainErr = xpcall(function()
         return crops
     end
     local function GetArea(base)
-        local pivot = base:GetPivot()
+        local pivot = SafeGetPivot(base)
+        if not pivot then
+            log('ERROR', 'GetArea: Cannot get pivot from ' .. (base and base.ClassName or 'nil'))
+            return 0, 0, 0, 0  -- Return safe default values
+        end
         local size = base.Size
         local X1 = math.ceil(pivot.X - size.X/2)
         local Z1 = math.ceil(pivot.Z - size.Z/2)
@@ -604,7 +653,7 @@ local mainOk, mainErr = xpcall(function()
     
     local PlantLocations, PlantsPhysical, X1,Z1,X2,Z2
     if MyFarm then
-        NPCLocations.Farm = MyFarm:GetPivot().Position
+        NPCLocations.Farm = SafeGetPosition(MyFarm)
         local important = MyFarm:FindFirstChild('Important')
         if important then
             PlantLocations = important:FindFirstChild('Plant_Locations')
@@ -742,12 +791,12 @@ local mainOk, mainErr = xpcall(function()
 
     local function CollectHarvestable(parent, plants, ignoreDist)
         local c = LocalPlayer.Character; if not c then return plants end
-        local pos = c:GetPivot().Position
+        local pos = SafeGetPosition(c)
         for _, child in ipairs(parent:GetChildren()) do
             local fruits = child:FindFirstChild('Fruits')
             if fruits then CollectHarvestable(fruits, plants, ignoreDist) end
-            local ok, plantPos = pcall(function() return child:GetPivot().Position end)
-            if ok and plantPos then
+            local plantPos = SafeGetPosition(child)
+            if plantPos then
                 local dist = (pos - plantPos).Magnitude
                 if (ignoreDist or dist <= 15) and ShouldHarvestPlant(child) and CanHarvest(child) then
                     table.insert(plants, child)
@@ -789,8 +838,8 @@ local mainOk, mainErr = xpcall(function()
             return
         end
         for _, plant in ipairs(plants) do
-            local ok, pos = pcall(function() return plant:GetPivot().Position end)
-            if ok then h:MoveTo(pos) end
+            local pos = SafeGetPosition(plant)
+            if pos then h:MoveTo(pos) end
         end
     end
 
