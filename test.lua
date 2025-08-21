@@ -145,36 +145,23 @@ end
 
 -- Enhanced UI library loader with better error reporting
 local function loadUILibrary()
-    local sources = {
-        {
-            name = 'Obsidian-main', 
-            url = 'https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua',
-            priority = 1
-        }
-    }
-    
-    -- Sort by priority
-    table.sort(sources, function(a, b) return a.priority < b.priority end)
-    
-    for _, src in ipairs(sources) do
-        log('INFO', 'Attempting to load ' .. src.name)
-        local ok, lib = pcall(function()
-            local content = game:HttpGet(src.url, true)
-            if not content or content:find("404: Not Found") then
-                error("URL not found: " .. src.url)
-            end
-            return loadstring(content)()
-        end)
-        
-        if ok and lib then
-            _G.__AF2_LibName = src.name
-            log('SUCCESS', 'Loaded UI library: ' .. src.name)
-            return lib
-        else
-            log('WARN', 'Failed to load ' .. src.name .. ': ' .. tostring(lib))
+    local url = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua"
+    log('INFO', 'Attempting to load Obsidian UI Library')
+    local ok, lib = pcall(function()
+        local content = game:HttpGet(url, true)
+        if not content or content:find("404: Not Found") then
+            error("URL not found: " .. url)
         end
+        return loadstring(content)()
+    end)
+    
+    if ok and lib then
+        _G.__AF2_LibName = 'Obsidian-UI'
+        log('SUCCESS', 'Loaded UI library: Obsidian-UI')
+        return lib
+    else
+        error('Obsidian UI Library failed to load: ' .. tostring(lib))
     end
-    error('All UI libraries failed to load')
 end
 
 -- Begin enhanced bootstrap
@@ -226,8 +213,8 @@ if Library then
     end
     log('INFO', 'Library methods available: ' .. (#methods > 0 and table.concat(methods, ', ') or 'none'))
     
-    -- Test specific methods we need
-    local criticalMethods = {"CreateWindow", "AddTab", "AddLeftGroupbox"}
+    -- Test specific methods we need for Obsidian UI
+    local criticalMethods = {"CreateWindow", "CreateTab", "CreateSection"}
     for _, method in ipairs(criticalMethods) do
         if Library[method] then
             log('INFO', 'Critical method ' .. method .. ': AVAILABLE')
@@ -1040,10 +1027,9 @@ local mainOk, mainErr = xpcall(function()
         end
     end)
 
-    -- Main window using safe wrapper
-    local Window = safeLibraryCall("CreateWindow", {
+    -- Main window creation
+    local Window = Library:CreateWindow({
         Title = GameInfo.Name .. ' | Enhanced Auto-Farm v2.1',
-        Footer = 'Refactored stable bootstrap',
         Size = UDim2.fromOffset(580, 700),
         Icon = 'leaf',
         AutoShow = true,
@@ -1058,10 +1044,11 @@ local mainOk, mainErr = xpcall(function()
 
     if BootWindow then pcall(function() BootWindow:Destroy() end) BootWindow = nil BootLogBox = nil end
 
-    -- TABS & UI (Reuse original structure) -------------------------------------------------
-    local MainTab = safeLibraryCall("AddTab", {Name='Auto Farm', Icon='tractor', Description='Enhanced farming automation'})
+    -- TABS & UI using Obsidian API -----------------------------------------------
+    local MainTab = Window:CreateTab("Auto Farm", "tractor")
     if not MainTab then log('ERROR', 'Failed to create MainTab') return end
-    local PlantGroupbox = safeTabCall(MainTab, "AddLeftGroupbox", 'Enhanced Auto-Plant 🌱','sprout')
+    
+    local PlantGroupbox = MainTab:CreateSection("Enhanced Auto-Plant 🌱")
     if not PlantGroupbox then log('ERROR', 'Failed to create PlantGroupbox') return end
 
     SelectedSeed = PlantGroupbox:AddDropdown('SelectedSeed',{Text='Select Seed Type', Values={'All'}, Multi=false, Default='All'})
@@ -1072,16 +1059,16 @@ local mainOk, mainErr = xpcall(function()
     AutoPlantRandom = PlantGroupbox:AddToggle('AutoPlantRandom',{Text='Include random points', Default=false})
     PlantGroupbox:AddButton({Text='Plant All Selected', Func=AutoPlantLoop, Tooltip='Plant all selected seed types'})
 
-    local HarvestGroupbox = safeTabCall(MainTab, "AddRightGroupbox", 'Smart Auto-Harvest 🚜','wheat')
+    local HarvestGroupbox = MainTab:CreateSection("Smart Auto-Harvest 🚜")
     if not HarvestGroupbox then log('ERROR', 'Failed to create HarvestGroupbox') return end
     AutoHarvest = HarvestGroupbox:AddToggle('AutoHarvest',{Text='Auto Harvest', Default=false})
     HarvestByType = HarvestGroupbox:AddDropdown('HarvestByType',{Text='Harvest Seed Types', Values={'All'}, Multi=false, Default='All'})
     HarvestByVariant = HarvestGroupbox:AddDropdown('HarvestByVariant',{Text='Harvest Variants', Values={'All','Normal','Gold','Rainbow'}, Multi=false, Default='All'})
     HarvestGroupbox:AddButton({Text='Harvest All Filtered', Func=HarvestPlants, Tooltip='Harvest based on current filters'})
 
-    local ShopTab = safeLibraryCall("AddTab", {Name='Smart Shopping', Icon='shopping-cart', Description='Automated purchasing system'})
+    local ShopTab = Window:CreateTab("Smart Shopping", "shopping-cart")
     if not ShopTab then log('ERROR', 'Failed to create ShopTab') return end
-    local SeedShopGroupbox = safeTabCall(ShopTab, "AddLeftGroupbox", 'Seed Shop 🌰','seedling')
+    local SeedShopGroupbox = ShopTab:CreateSection("Seed Shop 🌰")
     if not SeedShopGroupbox then log('ERROR', 'Failed to create SeedShopGroupbox') return end
     SelectedSeedStock = SeedShopGroupbox:AddDropdown('SelectedSeedStock',{Text='Select Seed to Buy', Values={}, Multi=false, Default=''})
     AutoBuy = SeedShopGroupbox:AddToggle('AutoBuy',{Text='Auto Buy Seeds', Default=false})
@@ -1089,30 +1076,30 @@ local mainOk, mainErr = xpcall(function()
     SeedShopGroupbox:AddButton({Text='Buy All Stock', Func=BuyAllSelectedSeeds})
     SeedShopGroupbox:AddButton({Text='Teleport to Seed Shop', Func=function() TeleportToPosition(NPCLocations.SeedShop) end})
 
-    local GearShopGroupbox = safeTabCall(ShopTab, "AddRightGroupbox", 'Gear Shop ⚙️','tools')
+    local GearShopGroupbox = ShopTab:CreateSection("Gear Shop ⚙️")
     if not GearShopGroupbox then log('ERROR', 'Failed to create GearShopGroupbox') return end
     SelectedGear = GearShopGroupbox:AddDropdown('SelectedGear',{Text='Select Gear', Values={'Watering Can','Fertilizer','Shovel','Hoe'}, Multi=false, Default='Watering Can'})
     AutoGearBuy = GearShopGroupbox:AddToggle('AutoGearBuy',{Text='Auto Buy Gear', Default=false})
     GearShopGroupbox:AddButton({Text='Buy Selected Gear', Func=function() if SelectedGear and SelectedGear.Value then BuyGear(SelectedGear.Value) end end})
     GearShopGroupbox:AddButton({Text='Teleport to Gear Shop', Func=function() TeleportToPosition(NPCLocations.GearShop) end})
 
-    local PetShopGroupbox = safeTabCall(ShopTab, "AddLeftGroupbox", 'Pet Shop 🥚','heart')
+    local PetShopGroupbox = ShopTab:CreateSection("Pet Shop 🥚")
     if not PetShopGroupbox then log('ERROR', 'Failed to create PetShopGroupbox') return end
     SelectedEgg = PetShopGroupbox:AddDropdown('SelectedEgg',{Text='Select Egg Type', Values={'Basic Egg','Golden Egg','Rainbow Egg','Special Egg'}, Multi=false, Default='Basic Egg'})
     AutoEggBuy = PetShopGroupbox:AddToggle('AutoEggBuy',{Text='Auto Buy Eggs', Default=false})
     PetShopGroupbox:AddButton({Text='Buy Selected Egg', Func=function() if SelectedEgg and SelectedEgg.Value then BuyEgg(SelectedEgg.Value) end end})
     PetShopGroupbox:AddButton({Text='Teleport to Pet Shop', Func=function() TeleportToPosition(NPCLocations.PetShop) end})
 
-    local TeleportTab = safeLibraryCall("AddTab", {Name='Teleportation', Icon='map-pin', Description='Quick travel and navigation'})
+    local TeleportTab = Window:CreateTab("Teleportation", "map-pin")
     if not TeleportTab then log('ERROR', 'Failed to create TeleportTab') return end
-    local TeleportGroupbox = safeTabCall(TeleportTab, "AddLeftGroupbox", 'Quick Teleports 🌀','zap')
+    local TeleportGroupbox = TeleportTab:CreateSection("Quick Teleports 🌀")
     if not TeleportGroupbox then log('ERROR', 'Failed to create TeleportGroupbox') return end
     TeleportGroupbox:AddButton({Text='My Farm', Func=function() TeleportToPosition(NPCLocations.Farm) end})
     TeleportGroupbox:AddButton({Text='Sell Area', Func=function() TeleportToPosition(NPCLocations.SellArea) end})
     TeleportGroupbox:AddButton({Text='Beanstalk Event', Func=function() TeleportToPosition(NPCLocations.BeanstalkEvent) end})
     TeleportGroupbox:AddButton({Text='Return to Previous', Func=ReturnToPreviousPosition})
 
-    local CustomTeleportGroupbox = safeTabCall(TeleportTab, "AddRightGroupbox", 'Custom Teleport 📍','target')
+    local CustomTeleportGroupbox = TeleportTab:CreateSection("Custom Teleport 📍")
     if not CustomTeleportGroupbox then log('ERROR', 'Failed to create CustomTeleportGroupbox') return end
     local TeleportX = CustomTeleportGroupbox:AddSlider('TeleportX',{Text='X Coordinate', Default=0, Min=-1000, Max=1000})
     local TeleportY = CustomTeleportGroupbox:AddSlider('TeleportY',{Text='Y Coordinate', Default=4, Min=0, Max=100})
@@ -1121,15 +1108,15 @@ local mainOk, mainErr = xpcall(function()
         TeleportToPosition(Vector3.new(TeleportX.Value or 0, TeleportY.Value or 4, TeleportZ.Value or 0))
     end})
 
-    local SellGroupbox = safeTabCall(TeleportTab, "AddLeftGroupbox", 'Smart Auto-Sell 💰','coins')
+    local SellGroupbox = TeleportTab:CreateSection("Smart Auto-Sell 💰")
     if not SellGroupbox then log('ERROR', 'Failed to create SellGroupbox') return end
     SellGroupbox:AddButton({Text='Sell Inventory Now', Func=SellInventory})
     AutoSell = SellGroupbox:AddToggle('AutoSell',{Text='Auto Sell', Default=false})
     SellThreshold = SellGroupbox:AddSlider('SellThreshold',{Text='Sell at crop count', Default=15, Min=1, Max=199})
 
-    local WalkTab = safeLibraryCall("AddTab", {Name='Movement', Icon='footprints', Description='Automatic movement and pathfinding'})
+    local WalkTab = Window:CreateTab("Movement", "footprints")
     if not WalkTab then log('ERROR', 'Failed to create WalkTab') return end
-    local WalkGroupbox = safeTabCall(WalkTab, "AddLeftGroupbox", 'Smart Auto-Walk 🚶','navigation')
+    local WalkGroupbox = WalkTab:CreateSection("Smart Auto-Walk 🚶")
     if not WalkGroupbox then log('ERROR', 'Failed to create WalkGroupbox') return end
     local AutoWalkStatus = WalkGroupbox:AddLabel('Status: Idle')
     AutoWalk = WalkGroupbox:AddToggle('AutoWalk',{Text='Auto Walk', Default=false, Callback=function(val) if not val then AutoWalkStatus:SetText('Status: Idle') end end})
@@ -1137,16 +1124,16 @@ local mainOk, mainErr = xpcall(function()
     NoClip = WalkGroupbox:AddToggle('NoClip',{Text='No Clip', Default=false})
     AutoWalkMaxWait = WalkGroupbox:AddSlider('AutoWalkMaxWait',{Text='Max delay (seconds)', Default=10, Min=1, Max=120})
 
-    local StatsTab = safeLibraryCall("AddTab", {Name='Statistics', Icon='bar-chart', Description='Session tracking and analytics'})
+    local StatsTab = Window:CreateTab("Statistics", "bar-chart")
     if not StatsTab then log('ERROR', 'Failed to create StatsTab') return end
-    local SessionGroupbox = safeTabCall(StatsTab, "AddLeftGroupbox", 'Session Statistics 📊','activity')
+    local SessionGroupbox = StatsTab:CreateSection("Session Statistics 📊")
     if not SessionGroupbox then log('ERROR', 'Failed to create SessionGroupbox') return end
     StatusLabels.SessionTime = SessionGroupbox:AddLabel('Session: 00:00')
     StatusLabels.PlantsHarvested = SessionGroupbox:AddLabel('Harvested: 0')
     StatusLabels.TotalProfit = SessionGroupbox:AddLabel('Profit: $0')
     StatusLabels.MutationsFound = SessionGroupbox:AddLabel('Mutations: 0')
 
-    local SessionStatsGroupbox = safeTabCall(StatsTab, "AddRightGroupbox", 'Activity Stats 🎯','target')
+    local SessionStatsGroupbox = StatsTab:CreateSection("Activity Stats 🎯")
     if not SessionStatsGroupbox then log('ERROR', 'Failed to create SessionStatsGroupbox') return end
     local SeedsPlantedLabel = SessionStatsGroupbox:AddLabel('Seeds Planted: 0')
     local GearsUsedLabel = SessionStatsGroupbox:AddLabel('Gears Used: 0')
@@ -1156,9 +1143,9 @@ local mainOk, mainErr = xpcall(function()
         UpdateSessionStats()
     end})
 
-    local InventoryTab = safeLibraryCall("AddTab", {Name='Inventory', Icon='package', Description='Smart inventory management'})
+    local InventoryTab = Window:CreateTab("Inventory", "package")
     if not InventoryTab then log('ERROR', 'Failed to create InventoryTab') return end
-    local InventoryGroupbox = safeTabCall(InventoryTab, "AddLeftGroupbox", 'Inventory Manager 📦','package')
+    local InventoryGroupbox = InventoryTab:CreateSection("Inventory Manager 📦")
     if not InventoryGroupbox then log('ERROR', 'Failed to create InventoryGroupbox') return end
     local InventoryStatus = InventoryGroupbox:AddLabel('Inventory: 0/200')
     local SeedCountLabel = InventoryGroupbox:AddLabel('Seeds: 0')
@@ -1173,9 +1160,9 @@ local mainOk, mainErr = xpcall(function()
         CropCountLabel:SetText('Crops: '..#crops)
     end})
 
-    local KeybindTab = safeLibraryCall("AddTab", {Name='Keybinds', Icon='keyboard', Description='Hotkey controls for quick actions'})
+    local KeybindTab = Window:CreateTab("Keybinds", "keyboard")
     if not KeybindTab then log('ERROR', 'Failed to create KeybindTab') return end
-    local KeybindGroupbox = safeTabCall(KeybindTab, "AddLeftGroupbox", 'Quick Controls ⌨️','zap')
+    local KeybindGroupbox = KeybindTab:CreateSection("Quick Controls ⌨️")
     if not KeybindGroupbox then log('ERROR', 'Failed to create KeybindGroupbox') return end
     KeybindGroupbox:AddLabel('F1 - Toggle Auto Plant')
     KeybindGroupbox:AddLabel('F2 - Toggle Auto Harvest')
