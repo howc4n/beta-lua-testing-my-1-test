@@ -24,13 +24,23 @@ local UserInputService = game:GetService("UserInputService")
 -- Player References
 local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local HumanoidRootPart
 
--- Remote Events & Services
-local PlantSeedRemote = ReplicatedStorage:WaitForChild("PlantSeedRemote_RE")
-local HarvestRemote = ReplicatedStorage:WaitForChild("HarvestRemote_RE")
-local TeleportRemote = ReplicatedStorage:WaitForChild("TeleportRemote_RE")
-local ActivePetsService = ReplicatedStorage:WaitForChild("ActivePetsService_upvr")
+-- Safe character initialization
+local function getRoot(char)
+    return char:FindFirstChild('HumanoidRootPart') or char:FindFirstChild('Torso') or char:FindFirstChild('UpperTorso')
+end
+
+-- Remote Events & Services (with safe loading)
+local PlantSeedRemote, HarvestRemote, TeleportRemote, ActivePetsService
+
+-- Safe service loading
+pcall(function()
+    PlantSeedRemote = ReplicatedStorage:FindFirstChild("PlantSeedRemote_RE")
+    HarvestRemote = ReplicatedStorage:FindFirstChild("HarvestRemote_RE") 
+    TeleportRemote = ReplicatedStorage:FindFirstChild("TeleportRemote_RE")
+    ActivePetsService = ReplicatedStorage:FindFirstChild("ActivePetsService_upvr")
+end)
 
 -- Configuration
 local CheatConfig = {
@@ -167,14 +177,20 @@ local function createNotification(title, message, duration)
 end
 
 local function teleportTo(position, instant)
+    local character = LocalPlayer.Character
+    if not character then return end
+    
+    local rootPart = getRoot(character)
+    if not rootPart then return end
+    
     if instant or CheatConfig.Teleport.InstantTP then
-        HumanoidRootPart.CFrame = CFrame.new(position)
+        rootPart.CFrame = CFrame.new(position)
         createNotification("🚀 Teleport", "Instantly teleported!", 2)
     else
-        local distance = (HumanoidRootPart.Position - position).Magnitude
+        local distance = (rootPart.Position - position).Magnitude
         local duration = distance / CheatConfig.Teleport.TweenSpeed
         
-        local tween = TweenService:Create(HumanoidRootPart, TweenInfo.new(duration), {
+        local tween = TweenService:Create(rootPart, TweenInfo.new(duration), {
             CFrame = CFrame.new(position)
         })
         tween:Play()
@@ -184,23 +200,29 @@ end
 
 -- Pet Feeding System
 local function getPetHungerPercentage(petUUID, petType)
-    local petState = ActivePetsService:GetClientPetState(LocalPlayer.Name)
-    local petData = petState[petUUID]
+    if not ActivePetsService then return nil end
     
-    if not petData then return nil end
+    pcall(function()
+        local petState = ActivePetsService:GetClientPetState(LocalPlayer.Name)
+        local petData = petState[petUUID]
+        
+        if not petData then return nil end
+        
+        -- Get DefaultHunger for pet type (simplified)
+        local defaultHunger = 100 -- Default value, should be fetched from PetList
+        
+        local currentHunger = petData.Hunger or 0
+        local hungerPercentage = (currentHunger / defaultHunger) * 100
+        
+        return {
+            Current = currentHunger,
+            Max = defaultHunger,
+            Percentage = hungerPercentage,
+            CanFeed = hungerPercentage < 100
+        }
+    end)
     
-    -- Get DefaultHunger for pet type (simplified)
-    local defaultHunger = 100 -- Default value, should be fetched from PetList
-    
-    local currentHunger = petData.Hunger or 0
-    local hungerPercentage = (currentHunger / defaultHunger) * 100
-    
-    return {
-        Current = currentHunger,
-        Max = defaultHunger,
-        Percentage = hungerPercentage,
-        CanFeed = hungerPercentage < 100
-    }
+    return nil
 end
 
 local function getAllFeedableItems()
@@ -229,69 +251,88 @@ end
 
 local function detectGardenPets()
     local activePets = {}
-    local petStates = ActivePetsService:GetClientPetState(LocalPlayer.Name)
     
-    for uuid, petData in pairs(petStates) do
-        if petData.Asset then
-            local petInfo = {
-                UUID = uuid,
-                PetType = "Unknown", -- Should be fetched from PetData
-                Position = petData.Asset:GetPivot().Position,
-                Model = petData.Asset,
-                Distance = (HumanoidRootPart.Position - petData.Asset:GetPivot().Position).Magnitude
-            }
-            table.insert(activePets, petInfo)
+    if not ActivePetsService then return activePets end
+    
+    pcall(function()
+        local petStates = ActivePetsService:GetClientPetState(LocalPlayer.Name)
+        
+        for uuid, petData in pairs(petStates) do
+            if petData.Asset then
+                local character = LocalPlayer.Character
+                if character then
+                    local rootPart = getRoot(character)
+                    if rootPart then
+                        local petInfo = {
+                            UUID = uuid,
+                            PetType = "Unknown", -- Should be fetched from PetData
+                            Position = petData.Asset:GetPivot().Position,
+                            Model = petData.Asset,
+                            Distance = (rootPart.Position - petData.Asset:GetPivot().Position).Magnitude
+                        }
+                        table.insert(activePets, petInfo)
+                    end
+                end
+            end
         end
-    end
+    end)
     
     return activePets
 end
 
 -- Auto Functions
 local function autoPlant()
-    if not CheatConfig.AutoPlant.Enabled then return end
+    if not CheatConfig.AutoPlant.Enabled or not PlantSeedRemote then return end
     
-    -- Simplified auto plant logic
-    local selectedSeed = CheatConfig.AutoPlant.SelectedSeeds[1]
-    if selectedSeed then
-        PlantSeedRemote:FireServer(selectedSeed)
-        print("🌱 Auto planted:", selectedSeed)
-    end
+    pcall(function()
+        -- Simplified auto plant logic
+        local selectedSeed = CheatConfig.AutoPlant.SelectedSeeds[1]
+        if selectedSeed then
+            PlantSeedRemote:FireServer(selectedSeed)
+            print("🌱 Auto planted:", selectedSeed)
+        end
+    end)
 end
 
 local function autoHarvest()
-    if not CheatConfig.AutoHarvest.Enabled then return end
+    if not CheatConfig.AutoHarvest.Enabled or not HarvestRemote then return end
     
-    -- Simplified auto harvest logic
-    HarvestRemote:FireServer()
-    print("🌾 Auto harvested!")
+    pcall(function()
+        -- Simplified auto harvest logic
+        HarvestRemote:FireServer()
+        print("🌾 Auto harvested!")
+    end)
 end
 
 local function autoFeedPets()
     if not CheatConfig.PetFeeding.Enabled then return end
     
-    local detectedPets = detectGardenPets()
-    local feedableItems = getAllFeedableItems()
-    
-    for _, pet in pairs(detectedPets) do
-        if pet.Distance <= CheatConfig.PetFeeding.FeedRadius then
-            local hungerInfo = getPetHungerPercentage(pet.UUID, pet.PetType)
-            
-            if hungerInfo and hungerInfo.Percentage < CheatConfig.PetFeeding.MinHungerPercent then
-                if #feedableItems > 0 then
-                    local food = feedableItems[1]
-                    if food.Tool.Parent ~= LocalPlayer.Character then
-                        food.Tool.Parent = LocalPlayer.Character
-                        wait(0.5)
+    pcall(function()
+        local detectedPets = detectGardenPets()
+        local feedableItems = getAllFeedableItems()
+        
+        for _, pet in pairs(detectedPets) do
+            if pet.Distance <= CheatConfig.PetFeeding.FeedRadius then
+                local hungerInfo = getPetHungerPercentage(pet.UUID, pet.PetType)
+                
+                if hungerInfo and hungerInfo.Percentage < CheatConfig.PetFeeding.MinHungerPercent then
+                    if #feedableItems > 0 then
+                        local food = feedableItems[1]
+                        if food.Tool.Parent ~= LocalPlayer.Character then
+                            food.Tool.Parent = LocalPlayer.Character
+                            wait(0.5)
+                        end
+                        
+                        if ActivePetsService then
+                            ActivePetsService:Feed(pet.UUID)
+                            print(string.format("🐾 Fed %s with %s", pet.PetType, food.Name))
+                            wait(1)
+                        end
                     end
-                    
-                    ActivePetsService:Feed(pet.UUID)
-                    print(string.format("🐾 Fed %s with %s", pet.PetType, food.Name))
-                    wait(1)
                 end
             end
         end
-    end
+    end)
 end
 
 -- UI Creation
@@ -557,6 +598,22 @@ spawn(function()
 end)
 
 -- Initialize
+wait(2) -- Wait for game to load
+
+-- Character event handling
+LocalPlayer.CharacterAdded:Connect(function()
+    wait(1)
+    Character = LocalPlayer.Character
+    HumanoidRootPart = getRoot(Character)
+    print("✅ Character loaded:", Character and Character.Name or "nil")
+end)
+
+-- Initial character setup
+if LocalPlayer.Character then
+    Character = LocalPlayer.Character
+    HumanoidRootPart = getRoot(Character)
+end
+
 local gui = createMainGUI()
 
 -- Keybind to toggle GUI
@@ -573,3 +630,8 @@ print("🔥 GROW A GARDEN - ULTIMATE CHEAT SYSTEM LOADED!")
 print("📱 Mobile-optimized UI with advanced features")
 print("🎮 Press INSERT to toggle GUI")
 print("✨ Features: Auto Plant/Harvest, Pet Feeding, Teleport, Smart Detection")
+print("🔧 Debug Info:")
+print("   Character:", LocalPlayer.Character and "✅" or "❌")
+print("   PlantSeedRemote:", PlantSeedRemote and "✅" or "❌")
+print("   HarvestRemote:", HarvestRemote and "✅" or "❌")
+print("   ActivePetsService:", ActivePetsService and "✅" or "❌")
