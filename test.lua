@@ -14,83 +14,92 @@ Features:
 ✅ Advanced Configuration System
 --]]
 
--- Services
+--// Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local MarketplaceService = game:GetService("MarketplaceService")
 
--- Player References
 local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local HumanoidRootPart
+local Character = LocalPlayer.Character
+local Leaderstats = LocalPlayer.leaderstats
+local Backpack = LocalPlayer.Backpack
+local PlayerGui = LocalPlayer.PlayerGui
+
+local ShecklesCount = Leaderstats and Leaderstats.Sheckles
+local GameInfo = MarketplaceService:GetProductInfo(game.PlaceId)
+
+--// Folders
+local GameEvents = ReplicatedStorage.GameEvents
+local Farms = workspace.Farm
 
 -- Safe character initialization
 local function getRoot(char)
-    return char:FindFirstChild('HumanoidRootPart') or char:FindFirstChild('Torso') or char:FindFirstChild('UpperTorso')
+    return char and (char:FindFirstChild('HumanoidRootPart') or char:FindFirstChild('Torso') or char:FindFirstChild('UpperTorso'))
 end
 
--- Remote Events & Services (with safe loading)
-local PlantSeedRemote, HarvestRemote, TeleportRemote, ActivePetsService
+--// Remote Events (proper game remotes)
+local PlantRemote = GameEvents and GameEvents:FindFirstChild("Plant_RE")
+local HarvestRemote = GameEvents and GameEvents:FindFirstChild("Harvest_RE")
+local SellRemote = GameEvents and GameEvents:FindFirstChild("Sell_Inventory")
+local BuySeedRemote = GameEvents and GameEvents:FindFirstChild("BuySeedStock")
 
--- Safe service loading
-pcall(function()
-    PlantSeedRemote = ReplicatedStorage:FindFirstChild("PlantSeedRemote_RE")
-    HarvestRemote = ReplicatedStorage:FindFirstChild("HarvestRemote_RE") 
-    TeleportRemote = ReplicatedStorage:FindFirstChild("TeleportRemote_RE")
-    ActivePetsService = ReplicatedStorage:FindFirstChild("ActivePetsService_upvr")
-end)
-
--- Configuration
+--// Configuration
 local CheatConfig = {
-    -- Auto Plant/Harvest
     AutoPlant = {
         Enabled = false,
-        SelectedSeeds = {},
-        SelectedVariants = {},
-        SelectedMutations = {},
-        PlantRadius = 20,
-        PlantInterval = 1
+        SelectedSeed = "Carrot",
+        PlantRandom = false,
+        PlantInterval = 0.3
     },
     
     AutoHarvest = {
         Enabled = false,
-        SelectedSeeds = {},
-        SelectedVariants = {},
-        SelectedMutations = {},
         HarvestRadius = 25,
-        HarvestInterval = 2
+        HarvestInterval = 0.1
     },
     
     AutoBuy = {
         Enabled = false,
-        SelectedSeeds = {},
-        BuyAmount = 10,
-        MaxSheckles = 50000,
-        AutoTeleportToShop = true
+        SelectedSeed = "Carrot",
+        BuyAmount = 10
     },
     
-    -- Enhanced Pet Feeding
-    PetFeeding = {
+    AutoSell = {
         Enabled = false,
-        MinHungerPercent = 80,
-        MaxHungerPercent = 95,
-        FeedRadius = 15,
-        FeedInterval = 3,
-        UseUniversalItems = true,
-        AutoEquipBestFood = true,
-        SelectedPetTypes = {}
+        SellThreshold = 15
     },
     
-    -- Teleport System
+    AutoWalk = {
+        Enabled = false,
+        MaxWait = 10,
+        AllowRandom = true
+    },
+    
+    NoClip = {
+        Enabled = false
+    },
+    
     Teleport = {
         InstantTP = false,
         TweenSpeed = 50
     }
 }
 
--- Database
+--// Globals
+local IsSelling = false
+local SeedStock = {}
+local OwnedSeeds = {}
+
+local HarvestIgnores = {
+    Normal = false,
+    Gold = false,
+    Rainbow = false
+}
+
+--// Database
 local SeedDatabase = {
     "Carrot", "Corn", "Tomato", "Potato", "Eggplant", "Broccoli", 
     "Pumpkin", "Bell Pepper", "Radish", "Turnip", "Beet", "Parsnip",
@@ -99,28 +108,125 @@ local SeedDatabase = {
     "Mustard Green", "Watercress", "Endive", "Radicchio"
 }
 
-local VariantDatabase = {
-    "Normal", "Golden", "Rainbow", "Crystal", "Shadow", "Neon",
-    "Mystic", "Celestial", "Volcanic", "Frozen", "Electric", "Toxic"
-}
-
-local MutationDatabase = {
-    "None", "Gigantic", "Miniature", "Glowing", "Crystalline", 
-    "Metallic", "Organic", "Synthetic", "Ancient", "Futuristic"
-}
-
 local NPCLocations = {
-    ["Eloise"] = Vector3.new(-169, 3, -199),
-    ["Isaac"] = Vector3.new(-251, 3, -75),
-    ["Event NPC"] = Vector3.new(-200, 3, -150),
-    ["Pet Mutation Machine"] = Vector3.new(-180, 3, -120),
-    ["Seed Shop"] = Vector3.new(-169, 3, -199),
-    ["Garden Center"] = Vector3.new(0, 3, 0),
-    ["Spawn"] = Vector3.new(-200, 3, -200)
+    ["Eloise"] = Vector3.new(62, 4, -26),
+    ["Garden Center"] = Vector3.new(0, 4, 0),
+    ["Spawn"] = Vector3.new(-200, 4, -200)
 }
 
--- Utility Functions
-local function createNotification(title, message, duration)
+--// Core Functions
+local function Plant(Position: Vector3, Seed: string)
+    if PlantRemote then
+        PlantRemote:FireServer(Position, Seed)
+        wait(CheatConfig.AutoPlant.PlantInterval)
+    end
+end
+
+local function GetFarms()
+    return Farms:GetChildren()
+end
+
+local function GetFarmOwner(Farm: Folder): string
+    local Important = Farm.Important
+    local Data = Important.Data
+    local Owner = Data.Owner
+    return Owner.Value
+end
+
+local function GetFarm(PlayerName: string): Folder?
+    local Farms = GetFarms()
+    for _, Farm in next, Farms do
+        local Owner = GetFarmOwner(Farm)
+        if Owner == PlayerName then
+            return Farm
+        end
+    end
+    return
+end
+
+local function SellInventory()
+    local Character = LocalPlayer.Character
+    if not Character then return end
+    
+    local Previous = Character:GetPivot()
+    local PreviousSheckles = ShecklesCount and ShecklesCount.Value or 0
+
+    --// Prevent conflict
+    if IsSelling then return end
+    IsSelling = true
+
+    Character:PivotTo(CFrame.new(62, 4, -26))
+    while wait() do
+        if ShecklesCount and ShecklesCount.Value ~= PreviousSheckles then break end
+        if SellRemote then
+            SellRemote:FireServer()
+        end
+    end
+    Character:PivotTo(Previous)
+
+    wait(0.2)
+    IsSelling = false
+end
+
+local function BuySeed(Seed: string)
+    if BuySeedRemote then
+        BuySeedRemote:FireServer(Seed)
+    end
+end
+
+local function GetSeedInfo(Seed: Tool): string?, number?
+    local PlantName = Seed:FindFirstChild("Plant_Name")
+    local Count = Seed:FindFirstChild("Numbers")
+    if not PlantName then return end
+    return PlantName.Value, Count and Count.Value or 1
+end
+
+local function CollectSeedsFromParent(Parent, Seeds: table)
+    for _, Tool in next, Parent:GetChildren() do
+        local Name, Count = GetSeedInfo(Tool)
+        if not Name then continue end
+        Seeds[Name] = {
+            Count = Count,
+            Tool = Tool
+        }
+    end
+end
+
+local function GetOwnedSeeds(): table
+    local Character = LocalPlayer.Character
+    
+    table.clear(OwnedSeeds)
+    CollectSeedsFromParent(Backpack, OwnedSeeds)
+    if Character then
+        CollectSeedsFromParent(Character, OwnedSeeds)
+    end
+    return OwnedSeeds
+end
+
+local function GetArea(Base: BasePart)
+    local Center = Base:GetPivot()
+    local Size = Base.Size
+
+    --// Bottom left
+    local X1 = math.ceil(Center.X - (Size.X/2))
+    local Z1 = math.ceil(Center.Z - (Size.Z/2))
+
+    --// Top right
+    local X2 = math.floor(Center.X + (Size.X/2))
+    local Z2 = math.floor(Center.Z + (Size.Z/2))
+
+    return X1, Z1, X2, Z2
+end
+
+local function EquipCheck(Tool)
+    local Character = LocalPlayer.Character
+    if not Character then return end
+    local Humanoid = Character:FindFirstChild("Humanoid")
+    if not Humanoid then return end
+
+    if Tool.Parent ~= Backpack then return end
+    Humanoid:EquipTool(Tool)
+end
     local notification = Instance.new("ScreenGui")
     notification.Name = "CheatNotification"
     notification.Parent = LocalPlayer.PlayerGui
@@ -176,6 +282,220 @@ local function createNotification(title, message, duration)
     end)
 end
 
+--// Auto farm functions
+local MyFarm = GetFarm(LocalPlayer.Name)
+local MyImportant = MyFarm and MyFarm.Important
+local PlantLocations = MyImportant and MyImportant.Plant_Locations
+local PlantsPhysical = MyImportant and MyImportant.Plants_Physical
+
+local function GetRandomFarmPoint(): Vector3?
+    if not PlantLocations then return end
+    local FarmLands = PlantLocations:GetChildren()
+    if #FarmLands == 0 then return end
+    
+    local FarmLand = FarmLands[math.random(1, #FarmLands)]
+    local X1, Z1, X2, Z2 = GetArea(FarmLand)
+    local X = math.random(X1, X2)
+    local Z = math.random(Z1, Z2)
+
+    return Vector3.new(X, 4, Z)
+end
+
+local function AutoPlantLoop()
+    local Seed = CheatConfig.AutoPlant.SelectedSeed
+    if not Seed then return end
+
+    local SeedData = OwnedSeeds[Seed]
+    if not SeedData then return end
+
+    local Count = SeedData.Count
+    local Tool = SeedData.Tool
+
+    --// Check for stock
+    if Count <= 0 then return end
+
+    local Planted = 0
+    local Step = 1
+
+    --// Check if the client needs to equip the tool
+    EquipCheck(Tool)
+
+    --// Plant at random points
+    if CheatConfig.AutoPlant.PlantRandom and PlantLocations then
+        for i = 1, Count do
+            local Point = GetRandomFarmPoint()
+            if Point then
+                Plant(Point, Seed)
+            end
+        end
+        return
+    end
+    
+    --// Plant on the farmland area
+    if PlantLocations then
+        local Dirt = PlantLocations:FindFirstChildOfClass("Part")
+        if Dirt then
+            local X1, Z1, X2, Z2 = GetArea(Dirt)
+            for X = X1, X2, Step do
+                for Z = Z1, Z2, Step do
+                    if Planted >= Count then break end
+                    local Point = Vector3.new(X, 0.13, Z)
+                    Planted += 1
+                    Plant(Point, Seed)
+                end
+            end
+        end
+    end
+end
+
+local function HarvestPlant(Plant: Model)
+    local Prompt = Plant:FindFirstChild("ProximityPrompt", true)
+    --// Check if it can be harvested
+    if not Prompt then return end
+    fireproximityprompt(Prompt)
+end
+
+local function CanHarvest(Plant): boolean?
+    local Prompt = Plant:FindFirstChild("ProximityPrompt", true)
+    if not Prompt then return end
+    if not Prompt.Enabled then return end
+    return true
+end
+
+local function CollectHarvestable(Parent, Plants, IgnoreDistance: boolean?)
+    local Character = LocalPlayer.Character
+    if not Character then return Plants end
+    local PlayerPosition = Character:GetPivot().Position
+
+    for _, Plant in next, Parent:GetChildren() do
+        --// Fruits
+        local Fruits = Plant:FindFirstChild("Fruits")
+        if Fruits then
+            CollectHarvestable(Fruits, Plants, IgnoreDistance)
+        end
+
+        --// Distance check
+        local PlantPosition = Plant:GetPivot().Position
+        local Distance = (PlayerPosition-PlantPosition).Magnitude
+        if not IgnoreDistance and Distance > CheatConfig.AutoHarvest.HarvestRadius then continue end
+
+        --// Ignore check
+        local Variant = Plant:FindFirstChild("Variant")
+        if Variant and HarvestIgnores[Variant.Value] then continue end
+
+        --// Collect
+        if CanHarvest(Plant) then
+            table.insert(Plants, Plant)
+        end
+    end
+    return Plants
+end
+
+local function GetHarvestablePlants(IgnoreDistance: boolean?)
+    local Plants = {}
+    if PlantsPhysical then
+        CollectHarvestable(PlantsPhysical, Plants, IgnoreDistance)
+    end
+    return Plants
+end
+
+local function AutoHarvestLoop()
+    if not PlantsPhysical then return end
+    local Plants = GetHarvestablePlants()
+    for _, Plant in next, Plants do
+        HarvestPlant(Plant)
+        wait(CheatConfig.AutoHarvest.HarvestInterval)
+    end
+end
+
+local function AutoSellCheck()
+    if not CheatConfig.AutoSell.Enabled then return end
+    
+    local Character = LocalPlayer.Character
+    if not Character then return end
+    
+    local CropCount = 0
+    for _, Tool in next, Backpack:GetChildren() do
+        if Tool:FindFirstChild("Item_String") then
+            CropCount += 1
+        end
+    end
+    for _, Tool in next, Character:GetChildren() do
+        if Tool:FindFirstChild("Item_String") then
+            CropCount += 1
+        end
+    end
+
+    if CropCount >= CheatConfig.AutoSell.SellThreshold then
+        SellInventory()
+    end
+end
+
+local function AutoWalkLoop()
+    if IsSelling then return end
+    if not CheatConfig.AutoWalk.Enabled then return end
+
+    local Character = LocalPlayer.Character
+    if not Character then return end
+    local Humanoid = Character:FindFirstChild("Humanoid")
+    if not Humanoid then return end
+
+    local Plants = GetHarvestablePlants(true)
+    local RandomAllowed = CheatConfig.AutoWalk.AllowRandom
+    local DoRandom = #Plants == 0 or math.random(1, 3) == 2
+
+    --// Random point
+    if RandomAllowed and DoRandom then
+        local Position = GetRandomFarmPoint()
+        if Position then
+            Humanoid:MoveTo(Position)
+        end
+        return
+    end
+   
+    --// Move to each plant
+    for _, Plant in next, Plants do
+        local Position = Plant:GetPivot().Position
+        Humanoid:MoveTo(Position)
+    end
+end
+
+local function NoclipLoop()
+    if not CheatConfig.NoClip.Enabled then return end
+    
+    local Character = LocalPlayer.Character
+    if not Character then return end
+
+    for _, Part in Character:GetDescendants() do
+        if Part:IsA("BasePart") then
+            Part.CanCollide = false
+        end
+    end
+end
+
+--// Utility Functions
+local function createNotification(title, message, duration)
+    local character = LocalPlayer.Character
+    if not character then return end
+    
+    local rootPart = getRoot(character)
+    if not rootPart then return end
+    
+    if instant or CheatConfig.Teleport.InstantTP then
+        rootPart.CFrame = CFrame.new(position)
+        createNotification("🚀 Teleport", "Instantly teleported!", 2)
+    else
+        local distance = (rootPart.Position - position).Magnitude
+        local duration = distance / CheatConfig.Teleport.TweenSpeed
+        
+        local tween = TweenService:Create(rootPart, TweenInfo.new(duration), {
+            CFrame = CFrame.new(position)
+        })
+        tween:Play()
+        createNotification("🚀 Teleport", string.format("Teleporting %.1f studs...", distance), duration)
+    end
+end
+
 local function teleportTo(position, instant)
     local character = LocalPlayer.Character
     if not character then return end
@@ -198,144 +518,83 @@ local function teleportTo(position, instant)
     end
 end
 
--- Pet Feeding System
-local function getPetHungerPercentage(petUUID, petType)
-    if not ActivePetsService then return nil end
+local function GetSeedStock(IgnoreNoStock: boolean?): table
+    local SeedShop = PlayerGui:FindFirstChild("Seed_Shop")
+    if not SeedShop then return {} end
     
-    pcall(function()
-        local petState = ActivePetsService:GetClientPetState(LocalPlayer.Name)
-        local petData = petState[petUUID]
-        
-        if not petData then return nil end
-        
-        -- Get DefaultHunger for pet type (simplified)
-        local defaultHunger = 100 -- Default value, should be fetched from PetList
-        
-        local currentHunger = petData.Hunger or 0
-        local hungerPercentage = (currentHunger / defaultHunger) * 100
-        
-        return {
-            Current = currentHunger,
-            Max = defaultHunger,
-            Percentage = hungerPercentage,
-            CanFeed = hungerPercentage < 100
-        }
-    end)
-    
-    return nil
-end
+    local Items = SeedShop:FindFirstChild("Blueberry", true)
+    if not Items then return {} end
+    Items = Items.Parent
 
-local function getAllFeedableItems()
-    local feedableItems = {}
-    local backpack = LocalPlayer.Backpack
-    local character = LocalPlayer.Character
-    
-    -- Check backpack
-    for _, tool in pairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") then
-            local canFeed = tool:HasTag("FruitTool") or tool:HasTag("FoodTool") or 
-                          tool:GetAttribute("ITEM_UUID") ~= nil
-            if canFeed then
-                table.insert(feedableItems, {
-                    Tool = tool,
-                    Name = tool.Name,
-                    Type = tool:HasTag("FruitTool") and "Fruit" or 
-                           tool:HasTag("FoodTool") and "Food" or "Universal"
-                })
-            end
+    local NewList = {}
+
+    for _, Item in next, Items:GetChildren() do
+        local MainFrame = Item:FindFirstChild("Main_Frame")
+        if not MainFrame then continue end
+
+        local StockText = MainFrame:FindFirstChild("Stock_Text")
+        if not StockText then continue end
+        
+        local StockCount = tonumber(StockText.Text:match("%d+")) or 0
+
+        --// Separate list
+        if IgnoreNoStock then
+            if StockCount <= 0 then continue end
+            NewList[Item.Name] = StockCount
+            continue
         end
+
+        SeedStock[Item.Name] = StockCount
     end
-    
-    return feedableItems
+
+    return IgnoreNoStock and NewList or SeedStock
 end
 
-local function detectGardenPets()
-    local activePets = {}
-    
-    if not ActivePetsService then return activePets end
-    
-    pcall(function()
-        local petStates = ActivePetsService:GetClientPetState(LocalPlayer.Name)
-        
-        for uuid, petData in pairs(petStates) do
-            if petData.Asset then
-                local character = LocalPlayer.Character
-                if character then
-                    local rootPart = getRoot(character)
-                    if rootPart then
-                        local petInfo = {
-                            UUID = uuid,
-                            PetType = "Unknown", -- Should be fetched from PetData
-                            Position = petData.Asset:GetPivot().Position,
-                            Model = petData.Asset,
-                            Distance = (rootPart.Position - petData.Asset:GetPivot().Position).Magnitude
-                        }
-                        table.insert(activePets, petInfo)
-                    end
-                end
+local function MakeLoop(Toggle, Func)
+    coroutine.wrap(function()
+        while wait(0.1) do
+            if not Toggle then continue end
+            pcall(Func)
+        end
+    end)()
+end
+
+local function StartServices()
+    --// Auto-Walk
+    MakeLoop(function() return CheatConfig.AutoWalk.Enabled end, function()
+        local MaxWait = CheatConfig.AutoWalk.MaxWait
+        AutoWalkLoop()
+        wait(math.random(1, MaxWait))
+    end)
+
+    --// Auto-Harvest
+    MakeLoop(function() return CheatConfig.AutoHarvest.Enabled end, AutoHarvestLoop)
+
+    --// Auto-Buy
+    MakeLoop(function() return CheatConfig.AutoBuy.Enabled end, function()
+        local Seed = CheatConfig.AutoBuy.SelectedSeed
+        local Stock = SeedStock[Seed]
+        if Stock and Stock > 0 then
+            for i = 1, math.min(Stock, CheatConfig.AutoBuy.BuyAmount) do
+                BuySeed(Seed)
+                wait(0.1)
             end
         end
     end)
-    
-    return activePets
-end
 
--- Auto Functions
-local function autoPlant()
-    if not CheatConfig.AutoPlant.Enabled or not PlantSeedRemote then return end
-    
-    pcall(function()
-        -- Simplified auto plant logic
-        local selectedSeed = CheatConfig.AutoPlant.SelectedSeeds[1]
-        if selectedSeed then
-            PlantSeedRemote:FireServer(selectedSeed)
-            print("🌱 Auto planted:", selectedSeed)
-        end
+    --// Auto-Plant
+    MakeLoop(function() return CheatConfig.AutoPlant.Enabled end, AutoPlantLoop)
+
+    --// Get stocks and seeds
+    MakeLoop(function() return true end, function()
+        GetSeedStock()
+        GetOwnedSeeds()
+        AutoSellCheck()
+        wait(1)
     end)
 end
 
-local function autoHarvest()
-    if not CheatConfig.AutoHarvest.Enabled or not HarvestRemote then return end
-    
-    pcall(function()
-        -- Simplified auto harvest logic
-        HarvestRemote:FireServer()
-        print("🌾 Auto harvested!")
-    end)
-end
-
-local function autoFeedPets()
-    if not CheatConfig.PetFeeding.Enabled then return end
-    
-    pcall(function()
-        local detectedPets = detectGardenPets()
-        local feedableItems = getAllFeedableItems()
-        
-        for _, pet in pairs(detectedPets) do
-            if pet.Distance <= CheatConfig.PetFeeding.FeedRadius then
-                local hungerInfo = getPetHungerPercentage(pet.UUID, pet.PetType)
-                
-                if hungerInfo and hungerInfo.Percentage < CheatConfig.PetFeeding.MinHungerPercent then
-                    if #feedableItems > 0 then
-                        local food = feedableItems[1]
-                        if food.Tool.Parent ~= LocalPlayer.Character then
-                            food.Tool.Parent = LocalPlayer.Character
-                            wait(0.5)
-                        end
-                        
-                        if ActivePetsService then
-                            ActivePetsService:Feed(pet.UUID)
-                            print(string.format("🐾 Fed %s with %s", pet.PetType, food.Name))
-                            wait(1)
-                        end
-                    end
-                end
-            end
-        end
-    end)
-end
-
--- UI Creation
+--// UI Creation (Simplified)
 local function createMainGUI()
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "GrowAGardenCheatGUI"
@@ -345,8 +604,8 @@ local function createMainGUI()
     -- Main Frame
     local MainFrame = Instance.new("Frame")
     MainFrame.Name = "MainFrame"
-    MainFrame.Size = UDim2.new(0.4, 0, 0.7, 0)
-    MainFrame.Position = UDim2.new(0.05, 0, 0.15, 0)
+    MainFrame.Size = UDim2.new(0.3, 0, 0.6, 0)
+    MainFrame.Position = UDim2.new(0.05, 0, 0.2, 0)
     MainFrame.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
     MainFrame.BackgroundTransparency = 0.05
     MainFrame.BorderSizePixel = 0
@@ -359,14 +618,9 @@ local function createMainGUI()
     Corner.CornerRadius = UDim.new(0, 12)
     Corner.Parent = MainFrame
     
-    local Stroke = Instance.new("UIStroke")
-    Stroke.Color = Color3.new(0.3, 0.6, 1)
-    Stroke.Thickness = 2
-    Stroke.Parent = MainFrame
-    
     -- Title Bar
     local TitleBar = Instance.new("Frame")
-    TitleBar.Size = UDim2.new(1, 0, 0, 50)
+    TitleBar.Size = UDim2.new(1, 0, 0, 40)
     TitleBar.Position = UDim2.new(0, 0, 0, 0)
     TitleBar.BackgroundColor3 = Color3.new(0.2, 0.4, 0.8)
     TitleBar.BorderSizePixel = 0
@@ -379,7 +633,7 @@ local function createMainGUI()
     local Title = Instance.new("TextLabel")
     Title.Size = UDim2.new(0.8, 0, 1, 0)
     Title.Position = UDim2.new(0.1, 0, 0, 0)
-    Title.Text = "🔥 GROW A GARDEN - ULTIMATE CHEAT v1.0"
+    Title.Text = GameInfo and GameInfo.Name .. " | Cheat Menu" or "Grow a Garden | Cheat Menu"
     Title.TextColor3 = Color3.new(1, 1, 1)
     Title.BackgroundTransparency = 1
     Title.TextScaled = true
@@ -388,9 +642,9 @@ local function createMainGUI()
     
     -- Close Button
     local CloseButton = Instance.new("TextButton")
-    CloseButton.Size = UDim2.new(0, 40, 0, 40)
-    CloseButton.Position = UDim2.new(1, -45, 0, 5)
-    CloseButton.Text = "✕"
+    CloseButton.Size = UDim2.new(0, 30, 0, 30)
+    CloseButton.Position = UDim2.new(1, -35, 0, 5)
+    CloseButton.Text = "X"
     CloseButton.TextColor3 = Color3.new(1, 1, 1)
     CloseButton.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
     CloseButton.BorderSizePixel = 0
@@ -406,61 +660,27 @@ local function createMainGUI()
         ScreenGui:Destroy()
     end)
     
-    -- Scroll Frame for Content
-    local ScrollFrame = Instance.new("ScrollingFrame")
-    ScrollFrame.Size = UDim2.new(1, -20, 1, -70)
-    ScrollFrame.Position = UDim2.new(0, 10, 0, 60)
-    ScrollFrame.BackgroundTransparency = 1
-    ScrollFrame.BorderSizePixel = 0
-    ScrollFrame.ScrollBarThickness = 8
-    ScrollFrame.ScrollBarImageColor3 = Color3.new(0.3, 0.6, 1)
-    ScrollFrame.Parent = MainFrame
+    -- Content Frame
+    local ContentFrame = Instance.new("Frame")
+    ContentFrame.Size = UDim2.new(1, -20, 1, -60)
+    ContentFrame.Position = UDim2.new(0, 10, 0, 50)
+    ContentFrame.BackgroundTransparency = 1
+    ContentFrame.Parent = MainFrame
     
-    local yOffset = 0
-    
-    -- Helper function to create sections
-    local function createSection(title, height)
-        local section = Instance.new("Frame")
-        section.Size = UDim2.new(1, -10, 0, height)
-        section.Position = UDim2.new(0, 5, 0, yOffset)
-        section.BackgroundColor3 = Color3.new(0.15, 0.15, 0.15)
-        section.BorderSizePixel = 0
-        section.Parent = ScrollFrame
-        
-        local sectionCorner = Instance.new("UICorner")
-        sectionCorner.CornerRadius = UDim.new(0, 8)
-        sectionCorner.Parent = section
-        
-        local sectionTitle = Instance.new("TextLabel")
-        sectionTitle.Size = UDim2.new(1, 0, 0, 30)
-        sectionTitle.Position = UDim2.new(0, 0, 0, 0)
-        sectionTitle.Text = title
-        sectionTitle.TextColor3 = Color3.new(1, 1, 1)
-        sectionTitle.BackgroundColor3 = Color3.new(0.2, 0.5, 0.8)
-        sectionTitle.TextScaled = true
-        sectionTitle.Font = Enum.Font.SourceSansBold
-        sectionTitle.Parent = section
-        
-        local titleCorner = Instance.new("UICorner")
-        titleCorner.CornerRadius = UDim.new(0, 8)
-        titleCorner.Parent = sectionTitle
-        
-        yOffset = yOffset + height + 10
-        return section
-    end
+    local yOffset = 10
     
     -- Helper function to create toggle button
-    local function createToggle(parent, text, yPos, callback)
+    local function createToggle(text, callback)
         local toggle = Instance.new("TextButton")
-        toggle.Size = UDim2.new(0.9, 0, 0, 35)
-        toggle.Position = UDim2.new(0.05, 0, 0, yPos)
+        toggle.Size = UDim2.new(1, -10, 0, 30)
+        toggle.Position = UDim2.new(0, 5, 0, yOffset)
         toggle.Text = "🔴 " .. text .. ": OFF"
         toggle.TextColor3 = Color3.new(1, 1, 1)
         toggle.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
         toggle.BorderSizePixel = 0
         toggle.TextScaled = true
         toggle.Font = Enum.Font.SourceSans
-        toggle.Parent = parent
+        toggle.Parent = ContentFrame
         
         local toggleCorner = Instance.new("UICorner")
         toggleCorner.CornerRadius = UDim.new(0, 6)
@@ -479,141 +699,105 @@ local function createMainGUI()
             callback(enabled)
         end)
         
+        yOffset = yOffset + 40
         return toggle
     end
     
-    -- Auto Plant Section
-    local plantSection = createSection("🌱 AUTO PLANT & HARVEST", 150)
-    
-    createToggle(plantSection, "Auto Plant", 40, function(enabled)
+    -- Create toggles
+    createToggle("Auto Plant", function(enabled)
         CheatConfig.AutoPlant.Enabled = enabled
         createNotification("🌱 Auto Plant", enabled and "Enabled" or "Disabled", 2)
     end)
     
-    createToggle(plantSection, "Auto Harvest", 85, function(enabled)
+    createToggle("Auto Harvest", function(enabled)
         CheatConfig.AutoHarvest.Enabled = enabled
         createNotification("🌾 Auto Harvest", enabled and "Enabled" or "Disabled", 2)
     end)
     
-    -- Pet Feeding Section
-    local petSection = createSection("🐾 ENHANCED PET FEEDING", 150)
-    
-    createToggle(petSection, "Auto Feed Pets", 40, function(enabled)
-        CheatConfig.PetFeeding.Enabled = enabled
-        createNotification("🐾 Pet Feeding", enabled and "Enabled" or "Disabled", 2)
+    createToggle("Auto Buy Seeds", function(enabled)
+        CheatConfig.AutoBuy.Enabled = enabled
+        createNotification("💰 Auto Buy", enabled and "Enabled" or "Disabled", 2)
     end)
     
-    -- Hunger threshold info
-    local hungerInfo = Instance.new("TextLabel")
-    hungerInfo.Size = UDim2.new(0.9, 0, 0, 25)
-    hungerInfo.Position = UDim2.new(0.05, 0, 0, 85)
-    hungerInfo.Text = "Feed when hunger < 80% | Stop at 95%"
-    hungerInfo.TextColor3 = Color3.new(0.8, 0.8, 0.8)
-    hungerInfo.BackgroundTransparency = 1
-    hungerInfo.TextScaled = true
-    hungerInfo.Font = Enum.Font.SourceSans
-    hungerInfo.Parent = petSection
+    createToggle("Auto Sell", function(enabled)
+        CheatConfig.AutoSell.Enabled = enabled
+        createNotification("💸 Auto Sell", enabled and "Enabled" or "Disabled", 2)
+    end)
     
-    -- Teleport Section
-    local teleportSection = createSection("🚀 TELEPORT SYSTEM", 200)
+    createToggle("Auto Walk", function(enabled)
+        CheatConfig.AutoWalk.Enabled = enabled
+        createNotification("🚶 Auto Walk", enabled and "Enabled" or "Disabled", 2)
+    end)
     
-    local teleportButtons = {
-        {"Eloise (Seed Shop)", "Eloise"},
-        {"Isaac (Pet NPC)", "Isaac"},
-        {"Garden Center", "Garden Center"},
-        {"Spawn Area", "Spawn"}
-    }
+    createToggle("NoClip", function(enabled)
+        CheatConfig.NoClip.Enabled = enabled
+        createNotification("👻 NoClip", enabled and "Enabled" or "Disabled", 2)
+    end)
     
-    for i, buttonData in ipairs(teleportButtons) do
+    -- Teleport buttons
+    local teleportLabel = Instance.new("TextLabel")
+    teleportLabel.Size = UDim2.new(1, -10, 0, 25)
+    teleportLabel.Position = UDim2.new(0, 5, 0, yOffset)
+    teleportLabel.Text = "🚀 Teleport:"
+    teleportLabel.TextColor3 = Color3.new(1, 1, 1)
+    teleportLabel.BackgroundTransparency = 1
+    teleportLabel.TextScaled = true
+    teleportLabel.Font = Enum.Font.SourceSansBold
+    teleportLabel.Parent = ContentFrame
+    
+    yOffset = yOffset + 30
+    
+    for name, location in pairs(NPCLocations) do
         local teleButton = Instance.new("TextButton")
-        teleButton.Size = UDim2.new(0.45, 0, 0, 30)
-        teleButton.Position = UDim2.new((i-1) % 2 == 0 and 0.05 or 0.5, 0, 0, 40 + math.floor((i-1)/2) * 35)
-        teleButton.Text = buttonData[1]
+        teleButton.Size = UDim2.new(1, -10, 0, 25)
+        teleButton.Position = UDim2.new(0, 5, 0, yOffset)
+        teleButton.Text = name
         teleButton.TextColor3 = Color3.new(1, 1, 1)
         teleButton.BackgroundColor3 = Color3.new(0.3, 0.6, 0.9)
         teleButton.BorderSizePixel = 0
         teleButton.TextScaled = true
         teleButton.Font = Enum.Font.SourceSans
-        teleButton.Parent = teleportSection
+        teleButton.Parent = ContentFrame
         
         local teleCorner = Instance.new("UICorner")
         teleCorner.CornerRadius = UDim.new(0, 5)
         teleCorner.Parent = teleButton
         
         teleButton.MouseButton1Click:Connect(function()
-            local location = NPCLocations[buttonData[2]]
-            if location then
-                teleportTo(location)
-            end
+            teleportTo(location)
         end)
+        
+        yOffset = yOffset + 30
     end
     
-    -- Instant TP Toggle
-    createToggle(teleportSection, "Instant Teleport", 155, function(enabled)
-        CheatConfig.Teleport.InstantTP = enabled
-        createNotification("🚀 Teleport", enabled and "Instant Mode" or "Smooth Mode", 2)
-    end)
-    
-    -- Info Section
-    local infoSection = createSection("📊 SYSTEM INFO", 120)
-    
-    local infoText = Instance.new("TextLabel")
-    infoText.Size = UDim2.new(0.9, 0, 0, 80)
-    infoText.Position = UDim2.new(0.05, 0, 0, 35)
-    infoText.Text = "✅ Real-time pet hunger monitoring\n✅ Universal backpack item feeding\n✅ Smart food selection\n✅ Mobile-optimized controls"
-    infoText.TextColor3 = Color3.new(0.8, 0.8, 0.8)
-    infoText.BackgroundTransparency = 1
-    infoText.TextScaled = true
-    infoText.Font = Enum.Font.SourceSans
-    infoText.TextYAlignment = Enum.TextYAlignment.Top
-    infoText.Parent = infoSection
-    
-    -- Update scroll canvas
-    ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset)
-    
-    createNotification("🔥 Cheat System", "Ultimate cheat loaded successfully!", 3)
+    createNotification("🔥 Cheat System", "Cheat system loaded!", 3)
     return ScreenGui
 end
 
--- Auto loops
-spawn(function()
-    while true do
-        autoPlant()
-        wait(CheatConfig.AutoPlant.PlantInterval)
-    end
-end)
-
-spawn(function()
-    while true do
-        autoHarvest()
-        wait(CheatConfig.AutoHarvest.HarvestInterval)
-    end
-end)
-
-spawn(function()
-    while true do
-        autoFeedPets()
-        wait(CheatConfig.PetFeeding.FeedInterval)
-    end
-end)
-
--- Initialize
-wait(2) -- Wait for game to load
+--// Connections and Initialization
+RunService.Stepped:Connect(NoclipLoop)
 
 -- Character event handling
-LocalPlayer.CharacterAdded:Connect(function()
+LocalPlayer.CharacterAdded:Connect(function(newCharacter)
     wait(1)
-    Character = LocalPlayer.Character
-    HumanoidRootPart = getRoot(Character)
-    print("✅ Character loaded:", Character and Character.Name or "nil")
+    Character = newCharacter
+    MyFarm = GetFarm(LocalPlayer.Name)
+    MyImportant = MyFarm and MyFarm.Important
+    PlantLocations = MyImportant and MyImportant.Plant_Locations
+    PlantsPhysical = MyImportant and MyImportant.Plants_Physical
+    print("✅ Character reloaded")
 end)
 
 -- Initial character setup
 if LocalPlayer.Character then
     Character = LocalPlayer.Character
-    HumanoidRootPart = getRoot(Character)
 end
 
+-- Start services
+StartServices()
+
+-- Create GUI
+wait(2) -- Wait for game to load
 local gui = createMainGUI()
 
 -- Keybind to toggle GUI
@@ -626,12 +810,12 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
-print("🔥 GROW A GARDEN - ULTIMATE CHEAT SYSTEM LOADED!")
-print("📱 Mobile-optimized UI with advanced features")
+print("🔥 GROW A GARDEN - CHEAT SYSTEM LOADED!")
 print("🎮 Press INSERT to toggle GUI")
-print("✨ Features: Auto Plant/Harvest, Pet Feeding, Teleport, Smart Detection")
+print("✨ Features: Auto Plant/Harvest, Auto Buy/Sell, Auto Walk, NoClip, Teleport")
 print("🔧 Debug Info:")
 print("   Character:", LocalPlayer.Character and "✅" or "❌")
-print("   PlantSeedRemote:", PlantSeedRemote and "✅" or "❌")
+print("   PlantRemote:", PlantRemote and "✅" or "❌")
 print("   HarvestRemote:", HarvestRemote and "✅" or "❌")
-print("   ActivePetsService:", ActivePetsService and "✅" or "❌")
+print("   GameEvents:", GameEvents and "✅" or "❌")
+print("   Farm:", MyFarm and "✅" or "❌")
