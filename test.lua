@@ -5,6 +5,114 @@
     https://www.roblox.com/games/126884695634066
 ]]
 
+-- DEBUG / SAFE BOOTSTRAP WRAPPER (added)
+local BOOT_SUCCESS, BOOT_ERROR = pcall(function()
+    -- Basic environment diagnostics
+    local startTick = tick and tick() or os.clock()
+    print("[AutoFarmV2] Bootstrap start @", startTick)
+    print("[AutoFarmV2] Executor Identify (if any):", identifyexecutor and identifyexecutor() or "Unknown")
+
+    -- Safer wait function abstraction
+    local function safeWait(t)
+        if task and task.wait then return task.wait(t) end
+        return wait(t)
+    end
+
+    -- Library loader with fallback & timeout
+    local function loadLibrary()
+        local lib
+        local ok, err = pcall(function()
+            lib = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua', true))()
+        end)
+        if ok and lib then
+            print('[AutoFarmV2] Loaded Obsidian main library')
+            return lib, 'Obsidian'
+        end
+        warn('[AutoFarmV2] Failed load Obsidian:', err)
+
+        ok, err = pcall(function()
+            lib = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua', true))()
+        end)
+        if ok and lib then
+            print('[AutoFarmV2] Loaded Obsidian fallback branch')
+            return lib, 'ObsidianFallback'
+        end
+        warn('[AutoFarmV2] Fallback branch failed:', err)
+
+        ok, err = pcall(function()
+            lib = loadstring(game:HttpGet('https://raw.githubusercontent.com/shlexware/Rayfield/main/source', true))()
+        end)
+        if ok and lib then
+            print('[AutoFarmV2] Loaded Rayfield as emergency fallback')
+            return lib, 'Rayfield'
+        end
+        error('ALL_UI_LIB_LOAD_FAILED:' .. tostring(err))
+    end
+
+    -- Replace previous direct library load
+    do
+        local LoadedLib, LibName = loadLibrary()
+        Library = LoadedLib
+        _G.__AF2_LibName = LibName
+    end
+
+    -- Pre-check critical services / objects
+    assert(game and game.PlaceId, 'Game object not available')
+    print('[AutoFarmV2] PlaceId:', game.PlaceId)
+
+    local rsOk, rs = pcall(function() return game:GetService('ReplicatedStorage') end)
+    assert(rsOk and rs, 'ReplicatedStorage missing')
+    assert(rs:FindFirstChild('GameEvents'), 'GameEvents folder missing in ReplicatedStorage')
+
+    -- Player readiness
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    local Players = game:GetService('Players')
+    local LocalPlayer = Players.LocalPlayer
+    while not LocalPlayer or not LocalPlayer.Character do
+        print('[AutoFarmV2] Waiting for character...')
+        safeWait(1)
+        LocalPlayer = Players.LocalPlayer
+    end
+    print('[AutoFarmV2] Character OK')
+
+    -- Farm detection probe (lightweight)
+    local farmFolder = workspace:FindFirstChild('Farm')
+    if not farmFolder then
+        warn('[AutoFarmV2] workspace.Farm not found, script may early-exit')
+    else
+        print('[AutoFarmV2] Farm folder children count:', #farmFolder:GetChildren())
+    end
+
+    -- Attach a minimal temp window early (sanity check UI)
+    local okUI, testWindow = pcall(function()
+        return Library:CreateWindow({
+            Title = 'AFv2 Loader / ' .. (_G.__AF2_LibName or 'UnknownLib'),
+            Size = UDim2.fromOffset(300, 120),
+            Center = true,
+            AutoShow = true,
+            Resizable = false,
+            Footer = 'Booting...'
+        })
+    end)
+    if okUI and testWindow then
+        local tab = testWindow:AddTab({Name='Log', Icon='info'})
+        local box = tab:AddLeftGroupbox('Status')
+        box:AddLabel('Library: ' .. (_G.__AF2_LibName or '?'))
+        box:AddLabel('PlaceId: ' .. tostring(game.PlaceId))
+        box:AddLabel('Player: ' .. Players.LocalPlayer.Name)
+        _G.__AF2_BootWindow = testWindow
+    else
+        warn('[AutoFarmV2] Failed to create temp window UI')
+    end
+end)
+
+if not BOOT_SUCCESS then
+    warn('[AutoFarmV2] FATAL BOOT ERROR =>', BOOT_ERROR)
+    return -- Abort entire script if bootstrap failed
+else
+    print('[AutoFarmV2] Bootstrap OK, continuing full script load...')
+end
+
 --// Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local InsertService = game:GetService("InsertService")
