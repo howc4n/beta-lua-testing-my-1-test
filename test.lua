@@ -1,7 +1,6 @@
 --[[
-    Refactored Grow a Garden Auto-Farm v2.1
-    Simplified single-phase bootstrap + robust dependency waiting + protected main body
-    Features preserved from previous v2.0 implementation.
+    Grow a Garden Auto-Farm v2.2 - Fixed Initialization
+    Enhanced error handling and dependency checking
 ]]
 
 -- Duplicate run guard
@@ -16,83 +15,147 @@ local function log(level, msg)
     print(string.format('[AFv2][%s][%05.2fs] %s', level, os.clock() - START_TIME, msg))
 end
 
+-- Enhanced safe wait with better error handling
 local function safewait(t)
-    if task and task.wait then return task.wait(t) end
-    if coroutine and coroutine.yield then
-        local ts = os.clock() + (t or 0)
-        repeat until os.clock() >= ts
+    if task and task.wait then 
+        return task.wait(t) 
+    elseif wait then
+        return wait(t)
+    else
+        local endTime = os.clock() + (t or 0)
+        while os.clock() < endTime do end
         return t
     end
-    return t
 end
 
--- Dependency wait helpers
+-- Improved dependency wait helpers
 local function waitForGameLoaded(timeout)
-    local deadline = os.clock() + (timeout or 30)
+    timeout = timeout or 30
+    local deadline = os.clock() + timeout
     while not game:IsLoaded() do
-        if os.clock() > deadline then return false, 'Game never loaded' end
+        if os.clock() > deadline then 
+            return false, 'Game never loaded within ' .. timeout .. ' seconds' 
+        end
         safewait(0.1)
     end
     return true
 end
 
+local function waitForService(serviceName, timeout)
+    timeout = timeout or 30
+    local deadline = os.clock() + timeout
+    local service = game:GetService(serviceName)
+    
+    -- Some services might need additional waiting
+    if serviceName == "Players" then
+        while os.clock() < deadline do
+            if service.LocalPlayer then
+                return true, service
+            end
+            safewait(0.5)
+        end
+        return false, serviceName .. ' service not ready'
+    end
+    
+    return true, service
+end
+
 local function waitForPlayer(timeout)
+    timeout = timeout or 60
+    local deadline = os.clock() + timeout
     local Players = game:GetService('Players')
-    local deadline = os.clock() + (timeout or 30)
+    
     while os.clock() < deadline do
         local lp = Players.LocalPlayer
         if lp and lp.Character and lp.Character:FindFirstChild('HumanoidRootPart') then
             return true, lp
         end
-        log('INFO','Waiting for player/character...')
+        log('INFO', 'Waiting for player/character...')
         safewait(1)
     end
-    return false, 'Player/Character timeout'
+    return false, 'Player/Character timeout after ' .. timeout .. ' seconds'
 end
 
+-- Enhanced UI library loader with better error reporting
 local function loadUILibrary()
     local sources = {
-        {name='Obsidian-main', url='https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua'},
-        {name='Obsidian-alt',  url='https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua'},
-        {name='Rayfield',      url='https://raw.githubusercontent.com/shlexware/Rayfield/main/source'},
+        {
+            name = 'Obsidian-main', 
+            url = 'https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua',
+            priority = 1
+        },
+        {
+            name = 'Obsidian-alt',  
+            url = 'https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua',
+            priority = 2
+        },
+        {
+            name = 'Rayfield',      
+            url = 'https://raw.githubusercontent.com/shlexware/Rayfield/main/source',
+            priority = 3
+        },
     }
+    
+    -- Sort by priority
+    table.sort(sources, function(a, b) return a.priority < b.priority end)
+    
     for _, src in ipairs(sources) do
+        log('INFO', 'Attempting to load ' .. src.name)
         local ok, lib = pcall(function()
-            return loadstring(game:HttpGet(src.url, true))()
+            local content = game:HttpGet(src.url, true)
+            if not content or content:find("404: Not Found") then
+                error("URL not found: " .. src.url)
+            end
+            return loadstring(content)()
         end)
+        
         if ok and lib then
             _G.__AF2_LibName = src.name
-            log('INFO','Loaded UI library: '..src.name)
+            log('SUCCESS', 'Loaded UI library: ' .. src.name)
             return lib
         else
-            log('WARN','Failed load '..src.name..': '..tostring(lib))
+            log('WARN', 'Failed to load ' .. src.name .. ': ' .. tostring(lib))
         end
     end
     error('All UI libraries failed to load')
 end
 
--- Begin bootstrap
+-- Begin enhanced bootstrap
+log('INFO', 'Starting enhanced bootstrap process')
+
 local okGame, gameErr = waitForGameLoaded(60)
 if not okGame then
-    warn('[AFv2] '..gameErr)
+    log('ERROR', 'Game load failed: ' .. gameErr)
     return
 end
 
-local playerOk, LocalPlayerOrErr = waitForPlayer(60)
+-- Wait for critical services first
+local services = {"ReplicatedStorage", "Players", "MarketplaceService", "RunService", "UserInputService"}
+for _, serviceName in ipairs(services) do
+    local ok, serviceOrErr = waitForService(serviceName, 30)
+    if not ok then
+        log('ERROR', 'Service not available: ' .. tostring(serviceOrErr))
+        return
+    end
+end
+
+local playerOk, LocalPlayerOrErr = waitForPlayer(90)  -- Increased timeout
 if not playerOk then
-    warn('[AFv2] '..LocalPlayerOrErr)
+    log('ERROR', 'Player initialization failed: ' .. LocalPlayerOrErr)
     return
 end
+
 local Players = game:GetService('Players')
 local LocalPlayer = Players.LocalPlayer
 
+-- Load UI library
 local Library
-local libOk, libErr = pcall(function()
-    Library = loadUILibrary()
-end)
-if not libOk or not Library then
-    warn('[AFv2] UI Library load failed: '..tostring(libErr))
+local libOk, libErr = pcall(loadUILibrary)
+if not libOk then
+    log('ERROR', 'UI Library load failed: ' .. tostring(libErr))
     return
+else
+    Library = libErr  -- libErr contains the library when successful
 end
 
 -- Temporary boot window
@@ -100,32 +163,40 @@ local BootWindow, BootLogBox
 local function bootlog(msg, level)
     level = level or 'INFO'
     log(level, msg)
-    if BootLogBox then BootLogBox:AddLabel(msg) end
+    if BootLogBox then 
+        pcall(function()
+            BootLogBox:AddLabel(msg)
+        end)
+    end
 end
 
 local function createBootWindow()
     local ok, win = pcall(function()
         return Library:CreateWindow({
-            Title = 'AFv2 Boot ('..(_G.__AF2_LibName or '?')..')',
-            Size = UDim2.fromOffset(380,260),
+            Title = 'AFv2 Boot (' .. (_G.__AF2_LibName or '?') .. ')',
+            Size = UDim2.fromOffset(380, 260),
             Center = true,
             AutoShow = true,
             Resizable = false,
             Footer = 'Initializing...'
         })
     end)
+    
     if ok and win then
         BootWindow = win
-        local tab = win:AddTab({Name='Boot', Icon='info'})
+        local tab = win:AddTab({Name = 'Boot', Icon = 'info'})
         local box = tab:AddLeftGroupbox('Progress')
         BootLogBox = box
-        box:AddLabel('UI Lib: '..(_G.__AF2_LibName or '?'))
-        box:AddLabel('PlaceId: '..tostring(game.PlaceId))
-        box:AddLabel('Player: '..LocalPlayer.Name)
+        box:AddLabel('UI Lib: ' .. (_G.__AF2_LibName or '?'))
+        box:AddLabel('PlaceId: ' .. tostring(game.PlaceId))
+        box:AddLabel('Player: ' .. LocalPlayer.Name)
+        return true
     else
-        log('WARN','Failed to create boot window UI')
+        log('WARN', 'Failed to create boot window UI: ' .. tostring(win))
+        return false
     end
 end
+
 createBootWindow()
 
 -- Validate core services
@@ -134,51 +205,90 @@ local MarketplaceService = game:GetService('MarketplaceService')
 local RunService = game:GetService('RunService')
 local UserInputService = game:GetService('UserInputService')
 
--- Wait for GameEvents with retry
-local function waitForChild(parent, childName, timeout)
-    local deadline = os.clock() + (timeout or 30)
+-- Enhanced waitForChild with better error reporting
+local function waitForChild(parent, childName, timeout, critical)
+    timeout = timeout or 30
+    local deadline = os.clock() + timeout
     local child = parent:FindFirstChild(childName)
+    
     while not child and os.clock() < deadline do
-        safewait(0.5)
+        bootlog('Waiting for ' .. childName .. '...')
+        safewait(1)
         child = parent:FindFirstChild(childName)
     end
+    
+    if not child and critical then
+        bootlog(childName .. ' not found after ' .. timeout .. ' seconds', 'ERROR')
+        return nil
+    end
+    
     return child
 end
 
 bootlog('Waiting for GameEvents...')
-local GameEventsFolder = waitForChild(ReplicatedStorage,'GameEvents',40)
+local GameEventsFolder = waitForChild(ReplicatedStorage, 'GameEvents', 45, true)
 if not GameEventsFolder then
     bootlog('GameEvents not found. Aborting.', 'ERROR')
     return
 end
 bootlog('GameEvents OK')
 
--- Mark boot complete (before main build to allow other scripts hooking)
-_G.__AF2_BOOT_COMPLETE = true
+-- Wait for critical player components
+bootlog('Waiting for player components...')
+local leaderstats = waitForChild(LocalPlayer, 'leaderstats', 30, true)
+local backpack = waitForChild(LocalPlayer, 'Backpack', 30, false)  -- Backpack might not be critical immediately
+local playergui = waitForChild(LocalPlayer, 'PlayerGui', 30, false)
 
--- Protected main body
+if not leaderstats then
+    bootlog('Leaderstats not found. Aborting.', 'ERROR')
+    return
+end
+
+-- Mark boot complete
+_G.__AF2_BOOT_COMPLETE = true
+bootlog('Bootstrap completed successfully')
+
+-- Protected main body execution with enhanced error handling
 local mainOk, mainErr = pcall(function()
     -----------------------------------------------------------------------------
-    -- MAIN IMPLEMENTATION (refactored, original features preserved)
+    -- MAIN IMPLEMENTATION 
     -----------------------------------------------------------------------------
-    -- shim for static analyzers (ignored at runtime in Roblox)
-    local Vector3 = Vector3
-    local CFrame = CFrame
-    local tick = tick
-
+    
     -- Additional services
     local InsertService = game:GetService('InsertService')
     local TweenService = game:GetService('TweenService')
 
-    local Leaderstats = LocalPlayer:WaitForChild('leaderstats')
-    local Backpack = LocalPlayer:WaitForChild('Backpack')
-    local PlayerGui = LocalPlayer:WaitForChild('PlayerGui')
+    -- Wait for critical components with error handling
+    local function safeWaitForChild(parent, childName, timeout)
+        timeout = timeout or 15
+        local child = parent:FindFirstChild(childName)
+        local deadline = os.clock() + timeout
+        
+        while not child and os.clock() < deadline do
+            safewait(0.5)
+            child = parent:FindFirstChild(childName)
+        end
+        
+        if not child then
+            error(childName .. ' not found in ' .. tostring(parent) .. ' after ' .. timeout .. ' seconds')
+        end
+        
+        return child
+    end
 
-    local ShecklesCount = Leaderstats:WaitForChild('Sheckles')
+    local ShecklesCount = safeWaitForChild(leaderstats, 'Sheckles', 20)
     local GameInfo = MarketplaceService:GetProductInfo(game.PlaceId)
 
-    -- Folders
-    local Farms = workspace:FindFirstChild('Farm') or workspace:WaitForChild('Farm', 20)
+    -- Folders with fallback
+    local Farms = workspace:FindFirstChild('Farm')
+    if not Farms then
+        bootlog('Waiting for Farm folder...', 'INFO')
+        Farms = workspace:WaitForChild('Farm', 20)
+    end
+    
+    if not Farms then
+        error('Farm folder not found in workspace')
+    end
 
     -- Accent colors
     local Accent = {
@@ -270,6 +380,10 @@ local mainOk, mainErr = pcall(function()
         end
     end
 
+    -- Get references from global scope
+    local Backpack = backpack or LocalPlayer:WaitForChild('Backpack')
+    local PlayerGui = playergui or LocalPlayer:WaitForChild('PlayerGui')
+
     -- GameEvents reference
     local GameEvents = ReplicatedStorage:WaitForChild('GameEvents')
 
@@ -280,10 +394,6 @@ local mainOk, mainErr = pcall(function()
         SessionStats.SeedsPlanted = SessionStats.SeedsPlanted + 1
         safewait(0.25)
         IsPlanting = false
-    end
-
-    local function GetFarms()
-        return Farms and Farms:GetChildren() or {}
     end
     local function GetFarmOwner(farm)
         local ok, result = pcall(function()
@@ -816,7 +926,7 @@ local mainOk, mainErr = pcall(function()
 
     -- Notifications
     pcall(function()
-        Library:Notify({Title='Enhanced Auto Farm v2.1', Description='Stable refactored bootstrap loaded!', Time=4})
+        Library:Notify({Title='Enhanced Auto Farm v2.2', Description='Fixed initialization loaded!', Time=4})
         Library:Notify({Title='Keybinds Active', Description='F1-F4 hotkeys ready.', Time=3})
     end)
 
@@ -832,8 +942,45 @@ local mainOk, mainErr = pcall(function()
 
 end) -- end pcall main body
 
+-- Main execution error handling
 if not mainOk then
-    bootlog('Main execution failed: '..tostring(mainErr), 'ERROR')
+    bootlog('Main execution failed: ' .. tostring(mainErr), 'ERROR')
+    
+    -- Try to display error in boot window
+    if BootLogBox then
+        pcall(function()
+            BootLogBox:AddLabel('ERROR: ' .. tostring(mainErr))
+            BootLogBox:AddLabel('Script execution halted')
+        end)
+    end
+    
+    -- Optional: Try to create a simple error message window
+    pcall(function()
+        Library:Notify({
+            Title = "Script Error",
+            Description = tostring(mainErr),
+            Time = 10
+        })
+    end)
 else
-    bootlog('Initialization complete.')
+    bootlog('Main execution completed successfully', 'SUCCESS')
+    
+    -- Close boot window if main window was created successfully
+    if BootWindow then
+        pcall(function() 
+            BootWindow:Destroy() 
+            BootWindow = nil
+            BootLogBox = nil
+        end)
+    end
 end
+
+-- Cleanup on script termination
+game:GetService("Players").PlayerRemoving:Connect(function(player)
+    if player == LocalPlayer then
+        _G.__AF2_RUNNING = false
+        if BootWindow then
+            pcall(function() BootWindow:Destroy() end)
+        end
+    end
+end)
