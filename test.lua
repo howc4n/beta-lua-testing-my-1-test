@@ -169,13 +169,17 @@ local function Plant(Position: Vector3, Seed: string)
 end
 
 local function GetFarms()
+    if not Farms then return {} end
     return Farms:GetChildren()
 end
 
-local function GetFarmOwner(Farm: Folder): string
-    local Important = Farm.Important
-    local Data = Important.Data
-    local Owner = Data.Owner
+local function GetFarmOwner(Farm: Folder): string?
+    local Important = Farm:FindFirstChild("Important")
+    if not Important then return end
+    local Data = Important:FindFirstChild("Data")
+    if not Data then return end
+    local Owner = Data:FindFirstChild("Owner")
+    if not Owner then return end
     return Owner.Value
 end
 
@@ -361,10 +365,25 @@ local PlantsPhysical
 
 -- Initialize farm data
 local function InitializeFarmData()
+    if not Farms then 
+        print("❌ No Farms folder found")
+        return 
+    end
+    
     MyFarm = GetFarm(LocalPlayer.Name)
-    MyImportant = MyFarm and MyFarm.Important
-    PlantLocations = MyImportant and MyImportant.Plant_Locations
-    PlantsPhysical = MyImportant and MyImportant.Plants_Physical
+    if not MyFarm then
+        print("❌ Player farm not found")
+        return
+    end
+    
+    MyImportant = MyFarm:FindFirstChild("Important")
+    if not MyImportant then
+        print("❌ Farm Important folder not found")
+        return
+    end
+    
+    PlantLocations = MyImportant:FindFirstChild("Plant_Locations")
+    PlantsPhysical = MyImportant:FindFirstChild("Plants_Physical")
     
     print("🔧 Farm data initialized:")
     print("   MyFarm:", MyFarm and "✅" or "❌")
@@ -560,30 +579,7 @@ local function NoclipLoop()
     end
 end
 
---// Utility Functions
-local function createNotification(title, message, duration)
-    local character = LocalPlayer.Character
-    if not character then return end
-    
-    local rootPart = getRoot(character)
-    if not rootPart then return end
-    
-    if instant or CheatConfig.Teleport.InstantTP then
-        rootPart.CFrame = CFrame.new(position)
-        createNotification("🚀 Teleport", "Instantly teleported!", 2)
-    else
-        local distance = (rootPart.Position - position).Magnitude
-        local duration = distance / CheatConfig.Teleport.TweenSpeed
-        
-        local tween = TweenService:Create(rootPart, TweenInfo.new(duration), {
-            CFrame = CFrame.new(position)
-        })
-        tween:Play()
-        createNotification("🚀 Teleport", string.format("Teleporting %.1f studs...", distance), duration)
-    end
-end
 
-local function GetSeedStock(IgnoreNoStock: boolean?): table
     local SeedShop = PlayerGui:FindFirstChild("Seed_Shop")
     if not SeedShop then return {} end
     
@@ -615,57 +611,66 @@ local function GetSeedStock(IgnoreNoStock: boolean?): table
     return IgnoreNoStock and NewList or SeedStock
 end
 
-local function MakeLoop(ToggleFunc, Func)
-    coroutine.wrap(function()
-        while wait(0.1) do
-            local enabled = false
-            if type(ToggleFunc) == "function" then
-                enabled = ToggleFunc()
-            else
-                enabled = ToggleFunc
-            end
-            
-            if enabled then
-                pcall(Func)
-            end
-        end
-    end)()
-end
-
 local function StartServices()
     print("🔧 Starting services...")
     
     --// Auto-Walk
-    MakeLoop(function() return CheatConfig.AutoWalk.Enabled end, function()
-        local MaxWait = CheatConfig.AutoWalk.MaxWait
-        AutoWalkLoop()
-        wait(math.random(1, MaxWait))
+    spawn(function()
+        while wait(0.01) do
+            if CheatConfig.AutoWalk.Enabled then
+                pcall(function()
+                    local MaxWait = CheatConfig.AutoWalk.MaxWait
+                    AutoWalkLoop()
+                    wait(math.random(1, MaxWait))
+                end)
+            end
+        end
     end)
 
     --// Auto-Harvest
-    MakeLoop(function() return CheatConfig.AutoHarvest.Enabled end, AutoHarvestLoop)
+    spawn(function()
+        while wait(0.01) do
+            if CheatConfig.AutoHarvest.Enabled then
+                pcall(AutoHarvestLoop)
+            end
+        end
+    end)
 
     --// Auto-Buy
-    MakeLoop(function() return CheatConfig.AutoBuy.Enabled end, function()
-        local Seed = CheatConfig.AutoBuy.SelectedSeed
-        local Stock = SeedStock[Seed]
-        if Stock and Stock > 0 then
-            for i = 1, math.min(Stock, CheatConfig.AutoBuy.BuyAmount) do
-                BuySeed(Seed)
-                wait(0.1)
+    spawn(function()
+        while wait(0.01) do
+            if CheatConfig.AutoBuy.Enabled then
+                pcall(function()
+                    local Seed = CheatConfig.AutoBuy.SelectedSeed
+                    local Stock = SeedStock[Seed]
+                    if Stock and Stock > 0 then
+                        for i = 1, math.min(Stock, CheatConfig.AutoBuy.BuyAmount) do
+                            BuySeed(Seed)
+                            wait(0.1)
+                        end
+                    end
+                end)
             end
         end
     end)
 
     --// Auto-Plant
-    MakeLoop(function() return CheatConfig.AutoPlant.Enabled end, AutoPlantLoop)
+    spawn(function()
+        while wait(0.01) do
+            if CheatConfig.AutoPlant.Enabled then
+                pcall(AutoPlantLoop)
+            end
+        end
+    end)
 
-    --// Get stocks and seeds
-    MakeLoop(function() return true end, function()
-        GetSeedStock()
-        GetOwnedSeeds()
-        AutoSellCheck()
-        wait(1)
+    --// Get stocks and seeds (continuous loop like autofarm.lua)
+    spawn(function()
+        while wait(0.1) do
+            pcall(function()
+                GetSeedStock()
+                GetOwnedSeeds()
+            end)
+        end
     end)
     
     print("🔧 Services started!")
@@ -855,6 +860,9 @@ end
 print("🔧 Setting up connections...")
 
 RunService.Stepped:Connect(NoclipLoop)
+
+-- Important: Auto-sell check when items are added to backpack
+Backpack.ChildAdded:Connect(AutoSellCheck)
 
 -- Character event handling
 LocalPlayer.CharacterAdded:Connect(function(newCharacter)
