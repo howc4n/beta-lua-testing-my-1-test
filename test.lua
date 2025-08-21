@@ -145,23 +145,45 @@ end
 
 -- Enhanced UI library loader with better error reporting
 local function loadUILibrary()
-    local url = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua"
-    log('INFO', 'Attempting to load Obsidian UI Library')
-    local ok, lib = pcall(function()
-        local content = game:HttpGet(url, true)
-        if not content or content:find("404: Not Found") then
-            error("URL not found: " .. url)
-        end
-        return loadstring(content)()
-    end)
+    -- Try multiple UI libraries in order of preference
+    local sources = {
+        {
+            name = "Rayfield",
+            url = "https://sirius.menu/rayfield",
+            test = function(lib) return lib and lib.CreateWindow end
+        },
+        {
+            name = "Obsidian-Alternative",
+            url = "https://raw.githubusercontent.com/EpixScripts/Obsidian/main/Library.lua",
+            test = function(lib) return lib and (lib.AddTab or lib.CreateWindow) end
+        },
+        {
+            name = "Obsidian-Main",
+            url = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua",
+            test = function(lib) return lib and lib.CreateWindow end
+        }
+    }
     
-    if ok and lib then
-        _G.__AF2_LibName = 'Obsidian-UI'
-        log('SUCCESS', 'Loaded UI library: Obsidian-UI')
-        return lib
-    else
-        error('Obsidian UI Library failed to load: ' .. tostring(lib))
+    for i, source in ipairs(sources) do
+        log('INFO', 'Attempting to load ' .. source.name .. ' from: ' .. source.url)
+        local ok, lib = pcall(function()
+            local content = game:HttpGet(source.url, true)
+            if not content or content:find("404: Not Found") then
+                error("URL not found: " .. source.url)
+            end
+            return loadstring(content)()
+        end)
+        
+        if ok and lib and source.test(lib) then
+            _G.__AF2_LibName = source.name
+            log('SUCCESS', 'Loaded UI library: ' .. source.name)
+            return lib
+        else
+            log('WARN', 'Failed to load ' .. source.name .. ': ' .. tostring(lib))
+        end
     end
+    
+    error('All UI library sources failed to load')
 end
 
 -- Begin enhanced bootstrap
@@ -202,7 +224,7 @@ else
     Library = libErr  -- libErr contains the library when successful
 end
 
--- Verify which library actually loaded
+-- Verify which library actually loaded and adjust API calls
 log('INFO', 'Loaded library type: ' .. (_G.__AF2_LibName or 'Unknown'))
 if Library then
     local methods = {}
@@ -213,7 +235,20 @@ if Library then
     end
     log('INFO', 'Library methods available: ' .. (#methods > 0 and table.concat(methods, ', ') or 'none'))
     
-    -- Test specific methods we need for Obsidian UI
+    -- Detect library type based on available methods
+    local libraryType = "Unknown"
+    if Library.AddTab then
+        libraryType = "Obsidian"
+    elseif Library.CreateWindow and not Library.AddTab then
+        if Library.AddTooltip and Library.UpdateColorsUsingRegistry then
+            libraryType = "Obsidian-Utility"
+        else
+            libraryType = "Rayfield"
+        end
+    end
+    log('INFO', 'Detected library type: ' .. libraryType)
+    
+    -- Test specific methods we need
     local criticalMethods = {"CreateWindow", "AddTab", "AddLeftGroupbox"}
     for _, method in ipairs(criticalMethods) do
         if Library[method] then
@@ -1027,16 +1062,32 @@ local mainOk, mainErr = xpcall(function()
         end
     end)
 
-    -- Helper: Obsidian-UI API shims
-    local function AddTab(window, name, icon)
-        return window:AddTab({ Name = name, Icon = icon })
-    end
-
-    local function AddSection(tab, name, right)
-        if right then
-            return tab:AddRightGroupbox({ Name = name })
+    -- Universal UI API wrappers (works with Rayfield, Obsidian, etc.)
+    local function AddTab(win, name, icon)
+        -- Rayfield API
+        if win.CreateTab then
+            return win:CreateTab({ Name = name, Image = icon })
+        -- Obsidian API
+        elseif win.AddTab then
+            return win:AddTab({ Name = name, Icon = icon })
         else
+            log('ERROR', 'No CreateTab or AddTab method available on window')
+            return nil
+        end
+    end
+    
+    local function AddSection(tab, name, right)
+        -- Rayfield API
+        if tab.CreateSection then
+            return tab:CreateSection(name)
+        -- Obsidian API
+        elseif right and tab.AddRightGroupbox then
+            return tab:AddRightGroupbox({ Name = name })
+        elseif tab.AddLeftGroupbox then
             return tab:AddLeftGroupbox({ Name = name })
+        else
+            log('ERROR', 'No section creation methods available on tab')
+            return nil
         end
     end
 
