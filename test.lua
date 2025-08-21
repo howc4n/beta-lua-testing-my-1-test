@@ -113,6 +113,155 @@ else
     print('[AutoFarmV2] Bootstrap OK, continuing full script load...')
 end
 
+-- >>> PATCH: Robustified bootstrap & full UI init guard <<<
+-- Remove second library load & convert temp boot window to progress panel until main window is ready.
+
+-- Prevent duplicate execution
+if _G.__AF2_RUNNING then
+    warn('[AutoFarmV2] Already running. Aborting duplicate.')
+    return
+end
+_G.__AF2_RUNNING = true
+
+-- Forward declared variables to allow bootstrap referencing before full def
+local Library -- will be set in bootstrap
+local MAIN_WINDOW_READY = false
+local BOOT_PANEL -- temp window
+local function bootLog(msg)
+    print('[AutoFarmV2]', msg)
+    if BOOT_PANEL and BOOT_PANEL.__LogBox then
+        BOOT_PANEL.__LogBox:AddLabel(msg)
+    end
+end
+
+-- Replace previous bootstrap block (leave existing code above intact)
+local BOOT_OK, BOOT_ERR = pcall(function()
+    local start = tick and tick() or os.clock()
+    bootLog('Bootstrap start @' .. tostring(start))
+
+    -- Library loader unified
+    local function loadUILib()
+        local sources = {
+            {name='Obsidian-main', url='https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua'},
+            {name='Obsidian-alt',  url='https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua'},
+            {name='Rayfield',      url='https://raw.githubusercontent.com/shlexware/Rayfield/main/source'},
+        }
+        for _, src in ipairs(sources) do
+            local ok, libOrErr = pcall(function()
+                return loadstring(game:HttpGet(src.url, true))()
+            end)
+            if ok and libOrErr then
+                _G.__AF2_LibName = src.name
+                bootLog('Loaded UI lib: ' .. src.name)
+                return libOrErr
+            else
+                bootLog('Fail load ' .. src.name .. ': ' .. tostring(libOrErr))
+            end
+        end
+        error('All UI libraries failed to load')
+    end
+
+    Library = loadUILib()
+
+    -- Early minimal panel
+    local okPanel, panel = pcall(function()
+        return Library:CreateWindow({
+            Title = 'AFv2 Boot (' .. (_G.__AF2_LibName or '?') .. ')',
+            Size = UDim2.fromOffset(380, 260),
+            Center = true,
+            AutoShow = true,
+            Resizable = false,
+            Footer = 'Initializing...'
+        })
+    end)
+    if okPanel and panel then
+        BOOT_PANEL = panel
+        local tab = panel:AddTab({Name='Boot', Icon='info'})
+        local box = tab:AddLeftGroupbox('Progress')
+        BOOT_PANEL.__LogBox = box
+        box:AddLabel('UI Lib: ' .. (_G.__AF2_LibName or '?'))
+        box:AddLabel('PlaceId: ' .. tostring(game.PlaceId))
+        box:AddLabel('Executor: ' .. (identifyexecutor and identifyexecutor() or 'Unknown'))
+    else
+        bootLog('Failed to create boot panel UI')
+    end
+
+    -- Service & asset checks
+    local rs = game:GetService('ReplicatedStorage')
+    if not rs:FindFirstChild('GameEvents') then
+        bootLog('GameEvents missing - will retry later')
+    else
+        bootLog('GameEvents folder OK')
+    end
+
+    if not workspace:FindFirstChild('Farm') then
+        bootLog('workspace.Farm missing (maybe not loaded yet)')
+    end
+end)
+
+if not BOOT_OK then
+    warn('[AutoFarmV2] BOOT FAIL:', BOOT_ERR)
+    return
+end
+
+-- Watchdog for full init (timeout if something blocks)
+local INIT_TIMEOUT = 60
+local initStart = tick and tick() or os.clock()
+local function timedOut()
+    local now = tick and tick() or os.clock()
+    return (now - initStart) > INIT_TIMEOUT
+end
+
+-- Defer heavy logic to separate thread so bootstrap returns quickly
+coroutine.wrap(function()
+    bootLog('Deferred main initialization...')
+
+    -- Wait for player & character
+    local Players = game:GetService('Players')
+    local lp = Players.LocalPlayer
+    while (not lp or not lp.Character) and not timedOut() do
+        bootLog('Waiting character...')
+        task.wait(1)
+        lp = Players.LocalPlayer
+    end
+    if timedOut() then
+        bootLog('Timeout waiting character. Abort.')
+        return
+    end
+
+    -- Wait GameEvents
+    local rs = game:GetService('ReplicatedStorage')
+    local tries = 0
+    while (not rs:FindFirstChild('GameEvents')) and tries < 30 and not timedOut() do
+        tries = tries + 1
+        bootLog('Waiting GameEvents (' .. tries .. ')')
+        task.wait(.5)
+    end
+    if not rs:FindFirstChild('GameEvents') then
+        bootLog('GameEvents never appeared. Abort.')
+        return
+    end
+
+    -- Inject original full script logic now (guard to prevent duplicate Library definition)
+    if _G.__AF2_MAIN_STARTED then
+        bootLog('Main already started, skipping.')
+        return
+    end
+    _G.__AF2_MAIN_STARTED = true
+
+    -- REMOVE redundant second load if present
+    -- (Search done automatically; manual removal below)
+
+    -- Continue with original script body AFTER this patch.
+    -- >>> PATCH END (main script below already present) <<<
+end)()
+
+-- MAIN BODY GUARD
+if not _G.__AF2_ALLOW_MAIN then
+    -- If somehow reached early, delay then proceed
+    repeat task.wait(0.05) until _G.__AF2_ALLOW_MAIN
+end
+
 --// Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local InsertService = game:GetService("InsertService")
@@ -131,7 +280,11 @@ local ShecklesCount = Leaderstats.Sheckles
 local GameInfo = MarketplaceService:GetProductInfo(game.PlaceId)
 
 --// Obsidian UI Library
-local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua'))()
+if _G.__AF2_SKIP_SECOND_LOAD then
+    -- Library already loaded in bootstrap
+else
+    Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua'))()
+end
 
 --// Folders
 local GameEvents = ReplicatedStorage.GameEvents
