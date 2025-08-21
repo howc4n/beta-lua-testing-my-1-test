@@ -22,18 +22,30 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local MarketplaceService = game:GetService("MarketplaceService")
 
+print("🔧 Loading services...")
+
 local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character
 local Leaderstats = LocalPlayer.leaderstats
 local Backpack = LocalPlayer.Backpack
 local PlayerGui = LocalPlayer.PlayerGui
 
+print("🔧 Player references loaded")
+
 local ShecklesCount = Leaderstats and Leaderstats.Sheckles
-local GameInfo = MarketplaceService:GetProductInfo(game.PlaceId)
+local GameInfo
+pcall(function()
+    GameInfo = MarketplaceService:GetProductInfo(game.PlaceId)
+end)
+
+print("🔧 Game info:", GameInfo and GameInfo.Name or "Failed to load")
 
 --// Folders
-local GameEvents = ReplicatedStorage.GameEvents
-local Farms = workspace.Farm
+local GameEvents = ReplicatedStorage:FindFirstChild("GameEvents")
+local Farms = workspace:FindFirstChild("Farm")
+
+print("🔧 GameEvents found:", GameEvents and "✅" or "❌")
+print("🔧 Farms found:", Farms and "✅" or "❌")
 
 -- Safe character initialization
 local function getRoot(char)
@@ -41,10 +53,44 @@ local function getRoot(char)
 end
 
 --// Remote Events (proper game remotes)
-local PlantRemote = GameEvents and GameEvents:FindFirstChild("Plant_RE")
-local HarvestRemote = GameEvents and GameEvents:FindFirstChild("Harvest_RE")
-local SellRemote = GameEvents and GameEvents:FindFirstChild("Sell_Inventory")
-local BuySeedRemote = GameEvents and GameEvents:FindFirstChild("BuySeedStock")
+local PlantRemote, HarvestRemote, SellRemote, BuySeedRemote
+
+if GameEvents then
+    -- Try different possible names for remotes
+    PlantRemote = GameEvents:FindFirstChild("Plant_RE") or 
+                  GameEvents:FindFirstChild("PlantRemote") or
+                  GameEvents:FindFirstChild("Plant") or
+                  GameEvents:FindFirstChild("PlantSeed")
+                  
+    HarvestRemote = GameEvents:FindFirstChild("Harvest_RE") or
+                    GameEvents:FindFirstChild("HarvestRemote") or
+                    GameEvents:FindFirstChild("Harvest") or
+                    GameEvents:FindFirstChild("HarvestPlant")
+                    
+    SellRemote = GameEvents:FindFirstChild("Sell_Inventory") or
+                 GameEvents:FindFirstChild("SellInventory") or
+                 GameEvents:FindFirstChild("Sell") or
+                 GameEvents:FindFirstChild("SellRemote")
+                 
+    BuySeedRemote = GameEvents:FindFirstChild("BuySeedStock") or
+                    GameEvents:FindFirstChild("BuySeed") or
+                    GameEvents:FindFirstChild("BuyRemote") or
+                    GameEvents:FindFirstChild("PurchaseSeed")
+                    
+    -- Debug: List all available remotes
+    print("🔧 Available GameEvents:")
+    for _, child in pairs(GameEvents:GetChildren()) do
+        if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+            print("   -", child.Name, "(" .. child.ClassName .. ")")
+        end
+    end
+end
+
+print("🔧 Remote Events:")
+print("   PlantRemote:", PlantRemote and "✅" or "❌")
+print("   HarvestRemote:", HarvestRemote and "✅" or "❌") 
+print("   SellRemote:", SellRemote and "✅" or "❌")
+print("   BuySeedRemote:", BuySeedRemote and "✅" or "❌")
 
 --// Configuration
 local CheatConfig = {
@@ -227,6 +273,9 @@ local function EquipCheck(Tool)
     if Tool.Parent ~= Backpack then return end
     Humanoid:EquipTool(Tool)
 end
+
+--// Utility Functions
+local function createNotification(title, message, duration)
     local notification = Instance.new("ScreenGui")
     notification.Name = "CheatNotification"
     notification.Parent = LocalPlayer.PlayerGui
@@ -282,11 +331,49 @@ end
     end)
 end
 
+local function teleportTo(position, instant)
+    local character = LocalPlayer.Character
+    if not character then return end
+    
+    local rootPart = getRoot(character)
+    if not rootPart then return end
+    
+    if instant or CheatConfig.Teleport.InstantTP then
+        rootPart.CFrame = CFrame.new(position)
+        createNotification("🚀 Teleport", "Instantly teleported!", 2)
+    else
+        local distance = (rootPart.Position - position).Magnitude
+        local duration = distance / CheatConfig.Teleport.TweenSpeed
+        
+        local tween = TweenService:Create(rootPart, TweenInfo.new(duration), {
+            CFrame = CFrame.new(position)
+        })
+        tween:Play()
+        createNotification("🚀 Teleport", string.format("Teleporting %.1f studs...", distance), duration)
+    end
+end
+
 --// Auto farm functions
-local MyFarm = GetFarm(LocalPlayer.Name)
-local MyImportant = MyFarm and MyFarm.Important
-local PlantLocations = MyImportant and MyImportant.Plant_Locations
-local PlantsPhysical = MyImportant and MyImportant.Plants_Physical
+local MyFarm
+local MyImportant
+local PlantLocations
+local PlantsPhysical
+
+-- Initialize farm data
+local function InitializeFarmData()
+    MyFarm = GetFarm(LocalPlayer.Name)
+    MyImportant = MyFarm and MyFarm.Important
+    PlantLocations = MyImportant and MyImportant.Plant_Locations
+    PlantsPhysical = MyImportant and MyImportant.Plants_Physical
+    
+    print("🔧 Farm data initialized:")
+    print("   MyFarm:", MyFarm and "✅" or "❌")
+    print("   PlantLocations:", PlantLocations and "✅" or "❌")
+    print("   PlantsPhysical:", PlantsPhysical and "✅" or "❌")
+end
+
+-- Initial farm data setup
+InitializeFarmData()
 
 local function GetRandomFarmPoint(): Vector3?
     if not PlantLocations then return end
@@ -496,28 +583,6 @@ local function createNotification(title, message, duration)
     end
 end
 
-local function teleportTo(position, instant)
-    local character = LocalPlayer.Character
-    if not character then return end
-    
-    local rootPart = getRoot(character)
-    if not rootPart then return end
-    
-    if instant or CheatConfig.Teleport.InstantTP then
-        rootPart.CFrame = CFrame.new(position)
-        createNotification("🚀 Teleport", "Instantly teleported!", 2)
-    else
-        local distance = (rootPart.Position - position).Magnitude
-        local duration = distance / CheatConfig.Teleport.TweenSpeed
-        
-        local tween = TweenService:Create(rootPart, TweenInfo.new(duration), {
-            CFrame = CFrame.new(position)
-        })
-        tween:Play()
-        createNotification("🚀 Teleport", string.format("Teleporting %.1f studs...", distance), duration)
-    end
-end
-
 local function GetSeedStock(IgnoreNoStock: boolean?): table
     local SeedShop = PlayerGui:FindFirstChild("Seed_Shop")
     if not SeedShop then return {} end
@@ -550,16 +615,26 @@ local function GetSeedStock(IgnoreNoStock: boolean?): table
     return IgnoreNoStock and NewList or SeedStock
 end
 
-local function MakeLoop(Toggle, Func)
+local function MakeLoop(ToggleFunc, Func)
     coroutine.wrap(function()
         while wait(0.1) do
-            if not Toggle then continue end
-            pcall(Func)
+            local enabled = false
+            if type(ToggleFunc) == "function" then
+                enabled = ToggleFunc()
+            else
+                enabled = ToggleFunc
+            end
+            
+            if enabled then
+                pcall(Func)
+            end
         end
     end)()
 end
 
 local function StartServices()
+    print("🔧 Starting services...")
+    
     --// Auto-Walk
     MakeLoop(function() return CheatConfig.AutoWalk.Enabled end, function()
         local MaxWait = CheatConfig.AutoWalk.MaxWait
@@ -592,6 +667,8 @@ local function StartServices()
         AutoSellCheck()
         wait(1)
     end)
+    
+    print("🔧 Services started!")
 end
 
 --// UI Creation (Simplified)
@@ -775,38 +852,52 @@ local function createMainGUI()
 end
 
 --// Connections and Initialization
+print("🔧 Setting up connections...")
+
 RunService.Stepped:Connect(NoclipLoop)
 
 -- Character event handling
 LocalPlayer.CharacterAdded:Connect(function(newCharacter)
+    print("🔧 Character added:", newCharacter.Name)
     wait(1)
     Character = newCharacter
-    MyFarm = GetFarm(LocalPlayer.Name)
-    MyImportant = MyFarm and MyFarm.Important
-    PlantLocations = MyImportant and MyImportant.Plant_Locations
-    PlantsPhysical = MyImportant and MyImportant.Plants_Physical
-    print("✅ Character reloaded")
+    InitializeFarmData()
+    print("✅ Character reloaded - Farm:", MyFarm and "Found" or "Not found")
 end)
 
 -- Initial character setup
 if LocalPlayer.Character then
     Character = LocalPlayer.Character
+    print("🔧 Initial character found:", Character.Name)
+else
+    print("🔧 No initial character, waiting...")
 end
 
+print("🔧 Starting services...")
 -- Start services
 StartServices()
 
+print("🔧 Creating GUI...")
 -- Create GUI
-wait(2) -- Wait for game to load
-local gui = createMainGUI()
-
--- Keybind to toggle GUI
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    
-    if input.KeyCode == Enum.KeyCode.Insert then
-        gui.Enabled = not gui.Enabled
-        createNotification("🎮 GUI Toggle", gui.Enabled and "Shown" or "Hidden", 2)
+spawn(function()
+    wait(2) -- Wait for game to load
+    print("🔧 GUI creation starting...")
+    local success, gui = pcall(createMainGUI)
+    if success and gui then
+        print("✅ GUI created successfully!")
+        
+        -- Keybind to toggle GUI
+        UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            
+            if input.KeyCode == Enum.KeyCode.Insert then
+                gui.Enabled = not gui.Enabled
+                createNotification("🎮 GUI Toggle", gui.Enabled and "Shown" or "Hidden", 2)
+                print("🎮 GUI toggled:", gui.Enabled and "Shown" or "Hidden")
+            end
+        end)
+    else
+        print("❌ GUI creation failed:", gui)
     end
 end)
 
