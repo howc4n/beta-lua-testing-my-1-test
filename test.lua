@@ -83,17 +83,7 @@ local function loadUILibrary()
             name = 'Obsidian-main', 
             url = 'https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua',
             priority = 1
-        },
-        {
-            name = 'Obsidian-alt',  
-            url = 'https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua',
-            priority = 2
-        },
-        {
-            name = 'Rayfield',      
-            url = 'https://raw.githubusercontent.com/shlexware/Rayfield/main/source',
-            priority = 3
-        },
+        }
     }
     
     -- Sort by priority
@@ -156,6 +146,30 @@ if not libOk then
     return
 else
     Library = libErr  -- libErr contains the library when successful
+end
+
+-- Verify which library actually loaded
+log('INFO', 'Loaded library type: ' .. (_G.__AF2_LibName or 'Unknown'))
+if Library then
+    local methods = {}
+    for k, v in pairs(Library) do
+        if type(v) == "function" then
+            table.insert(methods, k)
+        end
+    end
+    log('INFO', 'Library methods available: ' .. (#methods > 0 and table.concat(methods, ', ') or 'none'))
+    
+    -- Test specific methods we need
+    local criticalMethods = {"CreateWindow", "AddTab", "AddLeftGroupbox"}
+    for _, method in ipairs(criticalMethods) do
+        if Library[method] then
+            log('INFO', 'Critical method ' .. method .. ': AVAILABLE')
+        else
+            log('WARN', 'Critical method ' .. method .. ': MISSING')
+        end
+    end
+else
+    log('ERROR', 'Library is nil after loading')
 end
 
 -- Temporary boot window
@@ -294,24 +308,111 @@ local mainOk, mainErr = xpcall(function()
     bootlog('PlaceId: ' .. game.PlaceId)
     bootlog('UI Library: ' .. (_G.__AF2_LibName or 'Unknown'))
     
-    -- Safe Library function call wrapper
+    -- Safe Library function call wrapper with compatibility layer
     local function safeLibraryCall(funcName, ...)
-        if Library and Library[funcName] then
-            return Library[funcName](Library, ...)
-        else
-            log('ERROR', 'Library function ' .. funcName .. ' is not available')
+        if not Library then
+            log('ERROR', 'Library is not loaded')
             return nil
         end
+        
+        -- Try direct method first
+        if Library[funcName] then
+            log('DEBUG', 'Calling Library:' .. funcName)
+            return Library[funcName](Library, ...)
+        end
+        
+        -- Compatibility mappings for different libraries
+        local compatMapping = {
+            ["AddTab"] = "CreateTab",
+            ["CreateTab"] = "AddTab",
+            ["AddLeftGroupbox"] = "AddSection",
+            ["AddRightGroupbox"] = "AddSection"
+        }
+        
+        local altMethod = compatMapping[funcName]
+        if altMethod and Library[altMethod] then
+            log('INFO', 'Using compatibility mapping: ' .. funcName .. ' -> ' .. altMethod)
+            return Library[altMethod](Library, ...)
+        end
+        
+        log('ERROR', 'Library function ' .. funcName .. ' is not available')
+        log('DEBUG', 'Available methods: ' .. table.concat(
+            (function()
+                local methods = {}
+                for k, v in pairs(Library) do
+                    if type(v) == "function" then table.insert(methods, k) end
+                end
+                return methods
+            end)(), ', '))
+        return nil
     end
     
-    -- Safe Tab method call wrapper
+    -- Safe Tab method call wrapper with compatibility layer
     local function safeTabCall(tab, methodName, ...)
-        if tab and tab[methodName] then
-            return tab[methodName](tab, ...)
-        else
-            log('ERROR', 'Tab method ' .. methodName .. ' is not available')
+        if not tab then
+            log('ERROR', 'Tab object is nil')
             return nil
         end
+        
+        -- Try direct method first
+        if tab[methodName] then
+            log('DEBUG', 'Calling tab:' .. methodName)
+            return tab[methodName](tab, ...)
+        end
+        
+        -- Compatibility mappings for different tab APIs
+        local compatMapping = {
+            ["AddLeftGroupbox"] = "AddSection",
+            ["AddRightGroupbox"] = "AddSection",
+            ["AddSection"] = "AddLeftGroupbox"
+        }
+        
+        local altMethod = compatMapping[methodName]
+        if altMethod and tab[altMethod] then
+            log('INFO', 'Using tab compatibility mapping: ' .. methodName .. ' -> ' .. altMethod)
+            return tab[altMethod](tab, ...)
+        end
+        
+        log('ERROR', 'Tab method ' .. methodName .. ' is not available')
+        log('DEBUG', 'Available tab methods: ' .. table.concat(
+            (function()
+                local methods = {}
+                for k, v in pairs(tab) do
+                    if type(v) == "function" then table.insert(methods, k) end
+                end
+                return methods
+            end)(), ', '))
+        return nil
+    end
+    
+    -- Minimal UI test to verify library functionality
+    log('INFO', 'Testing UI creation...')
+    local testOk, testResult = pcall(function()
+        return Library:CreateWindow({
+            Title = 'Test Window',
+            Size = UDim2.fromOffset(200, 100),
+            Center = true,
+            AutoShow = true
+        })
+    end)
+    
+    if testOk and testResult then
+        log('SUCCESS', 'Test window created successfully')
+        -- Try to add a tab to verify full functionality
+        local tabOk, testTab = pcall(function()
+            return testResult:AddTab({Name = 'Test Tab'})
+        end)
+        if tabOk and testTab then
+            log('SUCCESS', 'Test tab created successfully - UI is fully functional')
+            -- Clean up test window
+            pcall(function() testResult:Destroy() end)
+        else
+            log('WARN', 'Test tab failed: ' .. tostring(testTab))
+        end
+    else
+        log('ERROR', 'Test window failed: ' .. tostring(testResult))
+        log('ERROR', 'UI creation will likely fail - aborting main execution')
+        return
     end
     
     -- Safe instance method wrappers to prevent crashes on wrong object types
