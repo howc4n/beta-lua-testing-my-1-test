@@ -475,6 +475,11 @@ local mainOk, mainErr = xpcall(function()
         end)
         if ok then return result end
     end
+    
+    local function GetFarms()
+        return Farms and Farms:GetChildren() or {}
+    end
+    
     local function GetFarm(playerName)
         for _, farm in ipairs(GetFarms()) do
             if GetFarmOwner(farm) == playerName then return farm end
@@ -587,6 +592,16 @@ local mainOk, mainErr = xpcall(function()
     end
 
     local MyFarm = GetFarm(LocalPlayer.Name)
+    if not MyFarm then
+        log('ERROR', 'Could not find player farm for: ' .. LocalPlayer.Name)
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Autofarm Error";
+            Text = "Could not find your farm!";
+            Duration = 10;
+        })
+        error("Could not find player's farm")
+    end
+    
     local PlantLocations, PlantsPhysical, X1,Z1,X2,Z2
     if MyFarm then
         NPCLocations.Farm = MyFarm:GetPivot().Position
