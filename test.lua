@@ -3,6 +3,73 @@
     Enhanced error handling and dependency checking
 ]]
 
+--══════════════════════════════════════════════════════
+-- 1-line console-to-clipboard logger
+--══════════════════════════════════════════════════════
+local HS = game:GetService("HttpService")
+local UIS = game:GetService("UserInputService")
+local buffer = {}
+
+local function copyToClip(text)
+    if setclipboard then
+        setclipboard(text)
+    else
+        -- fallback for executors without setclipboard
+        local bind = Instance.new("BindableFunction")
+        bind.OnInvoke = function() return text end
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "📋 Console copied!",
+            Text  = "Press Ctrl+V anywhere.",
+            Icon  = "rbxassetid://6034287510",
+            Duration = 3,
+            Callback = bind,
+            Button1  = "OK"
+        })
+    end
+end
+
+local function flush()
+    if #buffer == 0 then return end
+    local full = table.concat(buffer, "\n")
+    copyToClip(full)
+    buffer = {}
+end
+
+-- Hook Roblox's built-ins
+local oldPrint, oldWarn, oldError = print, warn, error
+print = function(...)
+    local msg = table.concat({...}, " ")
+    oldPrint(msg)
+    table.insert(buffer, "[PRINT] " .. msg)
+end
+warn  = function(...)
+    local msg = table.concat({...}, " ")
+    oldWarn(msg)
+    table.insert(buffer, "[WARN]  " .. msg)
+end
+error = function(msg, lvl)
+    local str = tostring(msg)
+    oldError(str, lvl)
+    table.insert(buffer, "[ERROR] " .. str)
+end
+
+-- Hotkey: Ctrl + Shift + C  → copy everything so far
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.C and UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
+        flush()
+    end
+end)
+
+-- Auto-flush every 5 seconds if you forget the hotkey
+task.spawn(function()
+    while true do
+        task.wait(5)
+        flush()
+    end
+end)
+--══════════════════════════════════════════════════════
+
 -- Duplicate run guard
 if _G.__AF2_RUNNING then
     warn('[AFv2] Script already running; aborting duplicate load.')
