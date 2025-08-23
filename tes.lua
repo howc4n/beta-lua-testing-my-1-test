@@ -1,8 +1,10 @@
 --══════════════════════════════════════════════════════
--- Remote Sniffer + Auto Clipboard Logger ⚔️ VOID Version
+-- Remote Sniffer + Manual Copy Buffer ⚔️ VOID Version
 --══════════════════════════════════════════════════════
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+
+local buffer = {} -- simpan semua log
 
 --══════════════════════════════════════════════════════
 -- Helper: safe dump argumen biar JSON aman
@@ -17,8 +19,6 @@ local function safeDump(args)
             dumped[i] = tostring(v)
         elseif t == "table" then
             dumped[i] = "[Table] size=" .. tostring(#v)
-        elseif t == "userdata" then
-            dumped[i] = "[UserData]"
         else
             dumped[i] = v
         end
@@ -49,7 +49,7 @@ for _, obj in pairs(ReplicatedStorage:GetDescendants()) do
             local dumped = safeDump(args)
             local line = "[RemoteEvent] " .. self:GetFullName() .. " " .. HttpService:JSONEncode(dumped)
             print(line)
-            copyToClip(line) -- auto copy 1-line
+            table.insert(buffer, line)
             return old(self, ...)
         end
     elseif obj:IsA("RemoteFunction") then
@@ -59,10 +59,19 @@ for _, obj in pairs(ReplicatedStorage:GetDescendants()) do
             local dumped = safeDump(args)
             local line = "[RemoteFunction] " .. self:GetFullName() .. " " .. HttpService:JSONEncode(dumped)
             print(line)
-            copyToClip(line) -- auto copy 1-line
+            table.insert(buffer, line)
             return old(self, ...)
         end
     end
 end
 
-print("✅ VOID Logger aktif: semua Remote call dicopy otomatis ke clipboard")
+--══════════════════════════════════════════════════════
+-- Fungsi manual buat copy semua log
+--══════════════════════════════════════════════════════
+_G.CopyLogs = function()
+    local text = table.concat(buffer, "\n")
+    copyToClip(text)
+end
+
+print("✅ VOID Logger aktif: semua log tersimpan ke buffer.")
+print("ℹ️ Jalankan _G.CopyLogs() kapan saja untuk copy semua log ke clipboard!")
