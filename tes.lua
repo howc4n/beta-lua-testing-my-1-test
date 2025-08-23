@@ -1,69 +1,84 @@
--- VOID Mobile/PC Adaptive Logger ⚔️
-if _G.__VOID_LOGGER then return end
-_G.__VOID_LOGGER = true
+-- Tambahkan kode ini di bagian paling akhir file IY.lua
+-- Sistem auto-copy console log untuk Android
 
-local HS = game:GetService("HttpService")
-local buffer = {}
-
-local function push(line)
-    table.insert(buffer, line)
-end
-
-local function flush()
-    if #buffer == 0 then return end
-    local text = table.concat(buffer, "\n")
-
-    if setclipboard then
-        setclipboard(text)
-        print("[VOID] Logs copied to clipboard ✅")
-    elseif writefile then
-        writefile("VOID_logs.txt", text)
-        print("[VOID] Logs written to workspace/VOID_logs.txt 📁")
-    elseif rconsoleprint then
-        rconsoleprint(text.."\n")
-        print("[VOID] Logs dumped to rconsole 📜")
-    else
-        warn("[VOID] No clipboard/file/rconsole support. Showing logs inline ↓↓↓")
-        warn(text)
+do
+    local old_print = print
+    local old_warn = warn
+    local old_error = error
+    
+    local log_buffer = {}
+    local last_copy_time = 0
+    local copy_interval = 5 -- Salin setiap 5 detik
+    
+    -- Override fungsi print
+    print = function(...)
+        local msg = table.concat({...}, " ")
+        old_print(msg)
+        table.insert(log_buffer, "[PRINT] " .. msg)
     end
-
-    buffer = {}
-end
-
--- override console
-local oldPrint, oldWarn, oldError = print, warn, error
-print = function(...)
-    local msg = table.concat({...}, " ")
-    oldPrint(msg)
-    push("[PRINT] "..msg)
-    flush()
-end
-warn = function(...)
-    local msg = table.concat({...}, " ")
-    oldWarn(msg)
-    push("[WARN] "..msg)
-    flush()
-end
-error = function(msg, lvl)
-    local str = tostring(msg)
-    oldError(str, lvl)
-    push("[ERROR] "..str)
-    flush()
-end
-
--- hook remotes
-local mt = getrawmetatable(game)
-local old = mt.__namecall
-setreadonly(mt, false)
-mt.__namecall = function(self, ...)
-    local m = getnamecallmethod()
-    if m == "FireServer" or m == "InvokeServer" then
-        local ok, path = pcall(function() return self:GetFullName() end)
-        push("["..m.."] "..(ok and path or tostring(self)).." "..HS:JSONEncode({...}))
-        flush()
+    
+    -- Override fungsi warn
+    warn = function(...)
+        local msg = table.concat({...}, " ")
+        old_warn(msg)
+        table.insert(log_buffer, "[WARN] " .. msg)
     end
-    return old(self, ...)
+    
+    -- Override fungsi error
+    error = function(msg, level)
+        local str = tostring(msg)
+        old_error(str, level)
+        table.insert(log_buffer, "[ERROR] " .. str)
+    end
+    
+    -- Fungsi untuk menyalin log ke clipboard
+    local function copy_logs_to_clipboard()
+        if #log_buffer == 0 then return end
+        
+        local full_text = table.concat(log_buffer, "\n")
+        
+        if everyClipboard then
+            everyClipboard(full_text)
+        elseif setclipboard then
+            setclipboard(full_text)
+        end
+    end
+    
+    -- Buat tombol di UI untuk menyalin manual
+    local CopyButton = Instance.new("TextButton")
+    CopyButton.Name = "CopyLogsButton"
+    CopyButton.Parent = ScaledHolder
+    CopyButton.BackgroundColor3 = Color3.fromRGB(46, 46, 47)
+    CopyButton.BorderSizePixel = 0
+    CopyButton.Position = UDim2.new(0, 10, 0, 10)
+    CopyButton.Size = UDim2.new(0, 100, 0, 30)
+    CopyButton.Font = Enum.Font.SourceSans
+    CopyButton.Text = "Copy Logs"
+    CopyButton.TextColor3 = Color3.new(1, 1, 1)
+    CopyButton.TextSize = 14
+    CopyButton.ZIndex = 100
+    CopyButton.Visible = true
+    
+    -- Tambahkan ke arrays untuk styling
+    table.insert(shade2, CopyButton)
+    table.insert(text1, CopyButton)
+    
+    -- Fungsi untuk handle klik tombol
+    CopyButton.MouseButton1Click:Connect(function()
+        copy_logs_to_clipboard()
+        notify("Logger", "Logs copied to clipboard!")
+    end)
+    
+    -- Sistem auto-copy periodik
+    task.spawn(function()
+        while true do
+            task.wait(copy_interval)
+            
+            -- Salin logs ke clipboard setiap interval
+            copy_logs_to_clipboard()
+            
+            -- Kosongkan buffer setelah disalin
+            log_buffer = {}
+        end
+    end)
 end
-setreadonly(mt, true)
-
-print("✅ VOID Logger active. Logs will auto-dump (Clipboard if PC / File if HP).")
