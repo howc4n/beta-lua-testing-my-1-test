@@ -1,75 +1,65 @@
---[[
-    Safe Console Logger v1.0
-    (prevents Delta executor parse errors)
-]]
-
--- kasih tanda kalau script berhasil jalan
-print("✅ Script sudah ter-run di client executor!")
-
--- kalau mau kasih warning/error style
-warn("⚡ Logger aktif: semua remote call akan dideteksi!")
-
 --══════════════════════════════════════════════════════
--- 1-line console-to-clipboard logger
+-- Remote Logger Auto-Copy (Obsidian2 Style) ⚔️
 --══════════════════════════════════════════════════════
 local HS = game:GetService("HttpService")
-local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
 local buffer = {}
 
-local function copyToClip(text)
-    if setclipboard then
-        setclipboard(text)
-    else
-        -- fallback for executors without setclipboard
-        local bind = Instance.new("BindableFunction")
-        bind.OnInvoke = function() return text end
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "Console copied!",
-            Text  = "Press Ctrl+V anywhere.",
-            Duration = 3,
-            Callback = bind,
-            Button1  = "OK"
-        })
+-- fungsi dump aman
+local function safeDump(args)
+    local dumped = {}
+    for i, v in ipairs(args) do
+        local t = typeof(v)
+        if t == "Instance" then
+            dumped[i] = "[Instance] " .. v:GetFullName()
+        elseif t == "Vector3" or t == "CFrame" or t == "Color3" then
+            dumped[i] = tostring(v)
+        elseif t == "table" then
+            dumped[i] = "[Table] size=" .. tostring(#v)
+        else
+            dumped[i] = tostring(v)
+        end
     end
+    return dumped
 end
 
+-- flush ke clipboard
 local function flush()
     if #buffer == 0 then return end
     local full = table.concat(buffer, "\n")
-    copyToClip(full)
+    if setclipboard then
+        setclipboard(full)
+        print("📋 Copied "..tostring(#buffer).." log(s) to clipboard")
+    end
     buffer = {}
 end
 
--- Hook built-ins
-local oldPrint, oldWarn, oldError = print, warn, error
+-- Hook RemoteEvent & RemoteFunction
+for _, obj in ipairs(RS:GetDescendants()) do
+    if obj:IsA("RemoteEvent") then
+        local old = obj.FireServer
+        obj.FireServer = function(self, ...)
+            local line = "[RemoteEvent] " .. self:GetFullName() .. " " .. HS:JSONEncode(safeDump({...}))
+            table.insert(buffer, line)
+            print(line) -- trigger flush lewat print
+            return old(self, ...)
+        end
+    elseif obj:IsA("RemoteFunction") then
+        local old = obj.InvokeServer
+        obj.InvokeServer = function(self, ...)
+            local line = "[RemoteFunction] " .. self:GetFullName() .. " " .. HS:JSONEncode(safeDump({...}))
+            table.insert(buffer, line)
+            print(line) -- trigger flush lewat print
+            return old(self, ...)
+        end
+    end
+end
+
+-- override print biar flush otomatis kayak obsidian2
+local oldPrint = print
 print = function(...)
-    local msg = table.concat({...}, " ")
-    oldPrint(msg)
-    table.insert(buffer, "[PRINT] " .. msg)
-end
-warn  = function(...)
-    local msg = table.concat({...}, " ")
-    oldWarn(msg)
-    table.insert(buffer, "[WARN]  " .. msg)
-end
-error = function(msg, lvl)
-    local str = tostring(msg)
-    oldError(str, lvl)
-    table.insert(buffer, "[ERROR] " .. str)
+    oldPrint(...)
+    flush()
 end
 
--- Hotkey: Ctrl+Shift+C = manual flush
-UIS.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.KeyCode == Enum.KeyCode.C and UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
-        flush()
-    end
-end)
-
--- Auto-flush tiap 5 detik
-task.spawn(function()
-    while true do
-        task.wait(5)
-        flush()
-    end
-end)
+print("✅ Remote Logger aktif (Obsidian2 style)")
