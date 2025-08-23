@@ -1,24 +1,29 @@
-local HS = game:GetService("HttpService")
-local RS = game:GetService("ReplicatedStorage")
-local buffer = {}
+--[[
+    Safe Console Logger v1.0
+    (prevents Delta executor parse errors)
+]]
 
-local function safeDump(args)
-    local dumped = {}
-    for i,v in ipairs(args) do
-        local t = typeof(v)
-        if t == "Instance" then
-            dumped[i] = v:GetFullName()
-        else
-            dumped[i] = tostring(v)
-        end
-    end
-    return dumped
-end
+--══════════════════════════════════════════════════════
+-- 1-line console-to-clipboard logger
+--══════════════════════════════════════════════════════
+local HS = game:GetService("HttpService")
+local UIS = game:GetService("UserInputService")
+local buffer = {}
 
 local function copyToClip(text)
     if setclipboard then
         setclipboard(text)
-        print("Copied to clipboard: "..string.sub(text,1,100)) -- preview
+    else
+        -- fallback for executors without setclipboard
+        local bind = Instance.new("BindableFunction")
+        bind.OnInvoke = function() return text end
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Console copied!",
+            Text  = "Press Ctrl+V anywhere.",
+            Duration = 3,
+            Callback = bind,
+            Button1  = "OK"
+        })
     end
 end
 
@@ -29,24 +34,36 @@ local function flush()
     buffer = {}
 end
 
-for _,obj in ipairs(RS:GetDescendants()) do
-    if obj:IsA("RemoteEvent") then
-        local old = obj.FireServer
-        obj.FireServer = function(self,...)
-            local line = "[RemoteEvent] "..self:GetFullName().." "..HS:JSONEncode(safeDump({...}))
-            table.insert(buffer,line)
-            flush()
-            return old(self,...)
-        end
-    elseif obj:IsA("RemoteFunction") then
-        local old = obj.InvokeServer
-        obj.InvokeServer = function(self,...)
-            local line = "[RemoteFunction] "..self:GetFullName().." "..HS:JSONEncode(safeDump({...}))
-            table.insert(buffer,line)
-            flush()
-            return old(self,...)
-        end
-    end
+-- Hook built-ins
+local oldPrint, oldWarn, oldError = print, warn, error
+print = function(...)
+    local msg = table.concat({...}, " ")
+    oldPrint(msg)
+    table.insert(buffer, "[PRINT] " .. msg)
+end
+warn  = function(...)
+    local msg = table.concat({...}, " ")
+    oldWarn(msg)
+    table.insert(buffer, "[WARN]  " .. msg)
+end
+error = function(msg, lvl)
+    local str = tostring(msg)
+    oldError(str, lvl)
+    table.insert(buffer, "[ERROR] " .. str)
 end
 
-print("Logger aktif")
+-- Hotkey: Ctrl+Shift+C = manual flush
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.C and UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
+        flush()
+    end
+end)
+
+-- Auto-flush tiap 5 detik
+task.spawn(function()
+    while true do
+        task.wait(5)
+        flush()
+    end
+end)
