@@ -3,6 +3,12 @@
     (prevents Delta executor parse errors)
 ]]
 
+-- kasih tanda kalau script berhasil jalan
+print("✅ Script sudah ter-run di client executor!")
+
+-- kalau mau kasih warning/error style
+warn("⚡ Logger aktif: semua remote call akan dideteksi!")
+
 --══════════════════════════════════════════════════════
 -- 1-line console-to-clipboard logger
 --══════════════════════════════════════════════════════
